@@ -1,0 +1,13 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!--
+    SwarSathi declares the Android TextToSpeech "intent query" so that Android 11+ can resolve
+    the installed system TTS engine. No runtime permission is required for speech synthesis, and
+    no INTERNET permission is requested by this module - offline voices must keep working without
+    network access.
+  -->
+  <queries>
+    <intent>
+      <action android:name="android.intent.action.TTS_SERVICE" />
+    </intent>
+  </queries>
+</manifest>

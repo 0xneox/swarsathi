@@ -1,0 +1,44 @@
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+apply plugin: 'expo-module-gradle-plugin'
+
+group = 'expo.modules.swarneuraltts'
+version = '0.1.0'
+
+// sherpa-onnx is published by its authors on JitPack rather than Maven Central, so the repository is
+// declared here. `mavenCentral()` already reaches this module through the root project's
+// `allprojects { repositories }` block, which is where `commons-compress` comes from.
+repositories {
+  maven { url 'https://jitpack.io' }
+}
+
+android {
+  namespace "expo.modules.swarneuraltts"
+
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+
+  lintOptions {
+    abortOnError false
+  }
+}
+
+dependencies {
+  // The sherpa-onnx Android runtime.
+  //
+  // Pinned to v1.13.8 on purpose. From v2.0.0 onwards the VITS `dataDir` parameter is deprecated and
+  // ignored, which would make the documented Piper + espeak-ng phonemiser path unusable; every
+  // Piper voice in SwarSathi's catalogue depends on exactly that parameter. See ARCHITECTURE.md
+  // section "Why sherpa-onnx v1.13.8".
+  //
+  // The AAR ships prebuilt `jni/<abi>/lib*.so` for arm64-v8a, armeabi-v7a, x86 and x86_64, so no
+  // native toolchain or NDK build step is required.
+  implementation 'com.github.k2-fsa.sherpa-onnx:sherpa-onnx:v1.13.8'
+
+  // bzip2 decompression for the `.tar.bz2` model archives. Apache-2.0, pure Java, and only the
+  // streaming bzip2 classes are used - no `java.nio.file` surface is touched, which keeps the
+  // module usable on older Android API levels.
+  implementation 'org.apache.commons:commons-compress:1.28.0'
+}

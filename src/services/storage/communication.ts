@@ -1,0 +1,403 @@
+import {
+  clampHistoryLimit,
+  communicationKey,
+  defaultHomeCardConfigs,
+} from '../../data/communication';
+import type {
+  CommunicationEntry,
+  CommunicationSource,
+  FrequentMessage,
+  HomeCardConfig,
+} from '../../types';
+import { logger } from '../../utils/logger';
+import { getDatabase } from './database';
+
+const SCOPE = 'Storage';
+
+/**
+ * Persistence for Part 4's rapid-communication data.
+ *
+ * Four small stores rather than one large one, because they have different lifetimes: the card
+ * layout is configuration, the history is disposable, the frequency table is a counter, and the
+ * emergency overrides are user-authored wording. Each has a SQLite implementation used by the app
+ * and an in-memory implementation used when the database cannot be opened (and by the tests).
+ */
+
+// region Home cards
+
+/** Persistence for which quick cards appear on Home and in what order. */
+export interface HomeCardRepository {
+  list(): Promise<HomeCardConfig[]>;
+  /** Writes the whole configuration. Unknown keys are ignored, not deleted. */
+  replaceAll(configs: HomeCardConfig[]): Promise<void>;
+}
+
+interface HomeCardRow {
+  key: string;
+  sortOrder: number;
+  enabled: number;
+}
+
+function rowToHomeCard(row: HomeCardRow): HomeCardConfig {
+  return { key: row.key, sortOrder: row.sortOrder, enabled: row.enabled === 1 };
+}
+
+export class SqliteHomeCardRepository implements HomeCardRepository {
+  async list(): Promise<HomeCardConfig[]> {
+    const database = await getDatabase();
+    const rows = await database.getAllAsync<HomeCardRow>(
+      'SELECT key, sortOrder, enabled FROM home_cards ORDER BY sortOrder ASC',
+      []
+    );
+    return rows.map(rowToHomeCard);
+  }
+
+  async replaceAll(configs: HomeCardConfig[]): Promise<void> {
+    const database = await getDatabase();
+    for (const config of configs) {
+      await database.runAsync(
+        `INSERT INTO home_cards (key, sortOrder, enabled)
+         VALUES ($key, $sortOrder, $enabled)
+         ON CONFLICT(key) DO UPDATE SET
+           sortOrder = excluded.sortOrder,
+           enabled = excluded.enabled`,
+        { $key: config.key, $sortOrder: config.sortOrder, $enabled: config.enabled ? 1 : 0 }
+      );
+    }
+  }
+}
+
+export class InMemoryHomeCardRepository implements HomeCardRepository {
+  private configs: HomeCardConfig[] | null = null;
+
+  async list(): Promise<HomeCardConfig[]> {
+    return (this.configs ?? defaultHomeCardConfigs()).map((config) => ({ ...config }));
+  }
+
+  async replaceAll(configs: HomeCardConfig[]): Promise<void> {
+    this.configs = configs.map((config) => ({ ...config }));
+  }
+}
+
+// endregion
+
+// region History
+
+/** Persistence for recently spoken messages. No audio is ever stored. */
+export interface CommunicationHistoryRepository {
+  /** Newest first, capped at the user's history limit. */
+  list(limit: number): Promise<CommunicationEntry[]>;
+  append(entry: CommunicationEntry): Promise<void>;
+  remove(id: string): Promise<void>;
+  clear(): Promise<void>;
+  /** Deletes everything older than the newest `limit` rows. */
+  trim(limit: number): Promise<void>;
+}
+
+interface HistoryRow {
+  id: string;
+  text: string;
+  language: string;
+  source: string;
+  spokenAt: number;
+}
+
+function rowToHistoryEntry(row: HistoryRow): CommunicationEntry {
+  return {
+    id: row.id,
+    text: row.text,
+    language: row.language,
+    source: coerceSource(row.source),
+    spokenAt: row.spokenAt,
+  };
+}
+
+function coerceSource(value: string): CommunicationSource {
+  return value === 'quick' ||
+    value === 'emergency' ||
+    value === 'editor' ||
+    value === 'phrase' ||
+    value === 'history'
+    ? value
+    : 'editor';
+}
+
+export class SqliteCommunicationHistoryRepository implements CommunicationHistoryRepository {
+  async list(limit: number): Promise<CommunicationEntry[]> {
+    const database = await getDatabase();
+    // rowid breaks ties between two messages said in the same millisecond, so the newest is always
+    // first even when the clock has not ticked.
+    const rows = await database.getAllAsync<HistoryRow>(
+      `SELECT id, text, language, source, spokenAt
+         FROM communication_history ORDER BY spokenAt DESC, rowid DESC LIMIT $limit`,
+      { $limit: clampHistoryLimit(limit) }
+    );
+    return rows.map(rowToHistoryEntry);
+  }
+
+  async append(entry: CommunicationEntry): Promise<void> {
+    const database = await getDatabase();
+    await database.runAsync(
+      `INSERT INTO communication_history (id, text, language, source, spokenAt)
+       VALUES ($id, $text, $language, $source, $spokenAt)
+       ON CONFLICT(id) DO UPDATE SET
+         text = excluded.text,
+         language = excluded.language,
+         source = excluded.source,
+         spokenAt = excluded.spokenAt`,
+      {
+        $id: entry.id,
+        $text: entry.text,
+        $language: entry.language,
+        $source: entry.source,
+        $spokenAt: entry.spokenAt,
+      }
+    );
+  }
+
+  async remove(id: string): Promise<void> {
+    const database = await getDatabase();
+    await database.runAsync('DELETE FROM communication_history WHERE id = $id', { $id: id });
+  }
+
+  async clear(): Promise<void> {
+    const database = await getDatabase();
+    await database.runAsync('DELETE FROM communication_history', []);
+  }
+
+  async trim(limit: number): Promise<void> {
+    const database = await getDatabase();
+    await database.runAsync(
+      `DELETE FROM communication_history
+        WHERE id NOT IN (
+          SELECT id FROM communication_history ORDER BY spokenAt DESC, rowid DESC LIMIT $limit
+        )`,
+      { $limit: clampHistoryLimit(limit) }
+    );
+  }
+}
+
+export class InMemoryCommunicationHistoryRepository implements CommunicationHistoryRepository {
+  /** Always kept in insertion order, so an entry's array position is its age. */
+  private entries: CommunicationEntry[] = [];
+
+  /** Newest first. Array position breaks ties, mirroring the rowid tie-break in SQLite. */
+  private byRecency(): { entry: CommunicationEntry; index: number }[] {
+    return this.entries
+      .map((entry, index) => ({ entry, index }))
+      .sort((a, b) => b.entry.spokenAt - a.entry.spokenAt || b.index - a.index);
+  }
+
+  async list(limit: number): Promise<CommunicationEntry[]> {
+    return this.byRecency()
+      .slice(0, clampHistoryLimit(limit))
+      .map(({ entry }) => ({ ...entry }));
+  }
+
+  async append(entry: CommunicationEntry): Promise<void> {
+    this.entries = this.entries.filter((existing) => existing.id !== entry.id);
+    this.entries.push({ ...entry });
+  }
+
+  async remove(id: string): Promise<void> {
+    this.entries = this.entries.filter((entry) => entry.id !== id);
+  }
+
+  async clear(): Promise<void> {
+    this.entries = [];
+  }
+
+  async trim(limit: number): Promise<void> {
+    const keep = new Set(this.byRecency().slice(0, clampHistoryLimit(limit)).map(({ entry }) => entry.id));
+    // Filtering rather than re-sorting keeps the array in insertion order for the next append.
+    this.entries = this.entries.filter((entry) => keep.has(entry.id));
+  }
+}
+
+// endregion
+
+// region Frequency
+
+/** Persistence for how often each message has been spoken. */
+export interface FrequencyRepository {
+  list(): Promise<FrequentMessage[]>;
+  /** Records one utterance, creating the counter when it is new. */
+  increment(text: string, language: string, at: number): Promise<void>;
+  clear(): Promise<void>;
+}
+
+interface FrequencyRow {
+  key: string;
+  text: string;
+  language: string;
+  count: number;
+  lastSpokenAt: number;
+}
+
+function rowToFrequent(row: FrequencyRow): FrequentMessage {
+  return {
+    key: row.key,
+    text: row.text,
+    language: row.language,
+    count: row.count,
+    lastSpokenAt: row.lastSpokenAt,
+  };
+}
+
+export class SqliteFrequencyRepository implements FrequencyRepository {
+  async list(): Promise<FrequentMessage[]> {
+    const database = await getDatabase();
+    const rows = await database.getAllAsync<FrequencyRow>(
+      'SELECT key, text, language, count, lastSpokenAt FROM message_frequency ORDER BY count DESC, lastSpokenAt DESC',
+      []
+    );
+    return rows.map(rowToFrequent);
+  }
+
+  async increment(text: string, language: string, at: number): Promise<void> {
+    const database = await getDatabase();
+    await database.runAsync(
+      `INSERT INTO message_frequency (key, text, language, count, lastSpokenAt)
+       VALUES ($key, $text, $language, 1, $lastSpokenAt)
+       ON CONFLICT(key) DO UPDATE SET
+         text = excluded.text,
+         count = message_frequency.count + 1,
+         lastSpokenAt = excluded.lastSpokenAt`,
+      { $key: communicationKey(text, language), $text: text, $language: language, $lastSpokenAt: at }
+    );
+  }
+
+  async clear(): Promise<void> {
+    const database = await getDatabase();
+    await database.runAsync('DELETE FROM message_frequency', []);
+  }
+}
+
+export class InMemoryFrequencyRepository implements FrequencyRepository {
+  private counters = new Map<string, FrequentMessage>();
+
+  async list(): Promise<FrequentMessage[]> {
+    return [...this.counters.values()]
+      .sort((a, b) => b.count - a.count || b.lastSpokenAt - a.lastSpokenAt)
+      .map((entry) => ({ ...entry }));
+  }
+
+  async increment(text: string, language: string, at: number): Promise<void> {
+    const key = communicationKey(text, language);
+    const existing = this.counters.get(key);
+    this.counters.set(key, {
+      key,
+      text,
+      language,
+      count: (existing?.count ?? 0) + 1,
+      lastSpokenAt: at,
+    });
+  }
+
+  async clear(): Promise<void> {
+    this.counters.clear();
+  }
+}
+
+// endregion
+
+// region Emergency messages
+
+/** A user-authored replacement for one bundled emergency message, in one language. */
+export interface EmergencyOverride {
+  id: string;
+  language: string;
+  text: string;
+  updatedAt: number;
+}
+
+/** Persistence for the user's edited emergency wording. */
+export interface EmergencyMessageRepository {
+  list(): Promise<EmergencyOverride[]>;
+  save(override: EmergencyOverride): Promise<void>;
+  /** Restores the bundled wording for one message in one language. */
+  remove(id: string, language: string): Promise<void>;
+  clear(): Promise<void>;
+}
+
+interface EmergencyRow {
+  id: string;
+  language: string;
+  text: string;
+  updatedAt: number;
+}
+
+export class SqliteEmergencyMessageRepository implements EmergencyMessageRepository {
+  async list(): Promise<EmergencyOverride[]> {
+    const database = await getDatabase();
+    const rows = await database.getAllAsync<EmergencyRow>(
+      'SELECT id, language, text, updatedAt FROM emergency_messages',
+      []
+    );
+    return rows.map((row) => ({ ...row }));
+  }
+
+  async save(override: EmergencyOverride): Promise<void> {
+    const database = await getDatabase();
+    await database.runAsync(
+      `INSERT INTO emergency_messages (id, language, text, updatedAt)
+       VALUES ($id, $language, $text, $updatedAt)
+       ON CONFLICT(id, language) DO UPDATE SET
+         text = excluded.text,
+         updatedAt = excluded.updatedAt`,
+      {
+        $id: override.id,
+        $language: override.language,
+        $text: override.text,
+        $updatedAt: override.updatedAt,
+      }
+    );
+  }
+
+  async remove(id: string, language: string): Promise<void> {
+    const database = await getDatabase();
+    await database.runAsync(
+      'DELETE FROM emergency_messages WHERE id = $id AND language = $language',
+      { $id: id, $language: language }
+    );
+  }
+
+  async clear(): Promise<void> {
+    const database = await getDatabase();
+    await database.runAsync('DELETE FROM emergency_messages', []);
+  }
+}
+
+export class InMemoryEmergencyMessageRepository implements EmergencyMessageRepository {
+  private overrides = new Map<string, EmergencyOverride>();
+
+  private static key(id: string, language: string): string {
+    return `${id}::${language}`;
+  }
+
+  async list(): Promise<EmergencyOverride[]> {
+    return [...this.overrides.values()].map((override) => ({ ...override }));
+  }
+
+  async save(override: EmergencyOverride): Promise<void> {
+    this.overrides.set(InMemoryEmergencyMessageRepository.key(override.id, override.language), {
+      ...override,
+    });
+  }
+
+  async remove(id: string, language: string): Promise<void> {
+    this.overrides.delete(InMemoryEmergencyMessageRepository.key(id, language));
+  }
+
+  async clear(): Promise<void> {
+    this.overrides.clear();
+  }
+}
+
+// endregion
+
+/** Logs a communication-storage failure without letting it reach the user as a crash. */
+export function reportCommunicationStorageFailure(operation: string, error: unknown): void {
+  logger.warn(SCOPE, `Could not ${operation}`);
+  void error;
+}

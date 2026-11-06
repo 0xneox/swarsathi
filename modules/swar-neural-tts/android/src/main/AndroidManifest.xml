@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!--
+    This module performs inference and playback entirely on the device. It deliberately requests no
+    permission at all: in particular there is no INTERNET permission, so the offline engine cannot
+    reach the network even by accident. Downloading a voice model is the application's job, and it
+    happens before this engine is ever asked to speak.
+  -->
+</manifest>

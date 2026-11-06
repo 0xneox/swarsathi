@@ -1,0 +1,11 @@
+{
+  "name": "swar-neural-tts",
+  "version": "0.1.0",
+  "description": "SwarSathi offline neural speech module: sherpa-onnx inference, audio playback and archive extraction (Kotlin).",
+  "license": "Apache-2.0",
+  "private": true,
+  "main": "index.ts",
+  "peerDependencies": {
+    "expo": "*"
+  }
+}
