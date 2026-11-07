@@ -20,7 +20,10 @@ android {
 
 dependencies {
   // TensorFlow Lite runtime for the bundled YAMNet model (Apache-2.0). The AAR ships the native
-  // `libtensorflowlite_jni` for every Android ABI, so no NDK build step is required. Pinned to a
-  // mature release; YAMNet uses only built-in operators, so no select-ops package is needed.
-  implementation 'org.tensorflow:tensorflow-lite:2.14.0'
+  // `libtensorflowlite_jni` for every Android ABI, so no NDK build step is required. YAMNet uses
+  // only built-in operators, so no select-ops package is needed.
+  //
+  // Pinned to 2.16.1: 2.14.0 fails manifest merging on AGP 8+ because tensorflow-lite and
+  // tensorflow-lite-api both declare the `org.tensorflow.lite` namespace.
+  implementation 'org.tensorflow:tensorflow-lite:2.16.1'
 }
