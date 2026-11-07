@@ -55,6 +55,7 @@ beforeEach(async () => {
     emergencyMessages: [],
     communicationHistory: [],
     frequentMessages: [],
+    messageUsage: [],
     bootstrapStatus: 'ready',
     storageAvailable: true,
   });
@@ -151,6 +152,37 @@ describe('Home screen', () => {
   });
 });
 
+describe('Home screen quick suggestions', () => {
+  // The suggestions follow the clock, so the hour is pinned to make the wording deterministic.
+  let hourSpy: jest.SpyInstance<number, []>;
+
+  beforeEach(() => {
+    hourSpy = jest.spyOn(Date.prototype, 'getHours').mockReturnValue(9);
+  });
+
+  afterEach(() => {
+    hourSpy.mockRestore();
+  });
+
+  it('offers three ready-made ideas worded for the time of day', async () => {
+    await render(<HomeScreen />);
+
+    expect(screen.getByText('Quick suggestions')).toBeTruthy();
+    expect(screen.getByTestId('quick-suggestion-general-hello')).toBeTruthy();
+    expect(screen.getByTestId('quick-suggestion-medical-water')).toBeTruthy();
+    expect(screen.getByTestId('quick-suggestion-daily-food')).toBeTruthy();
+  });
+
+  it('fills the editor with the idea but stays silent until Speak is pressed', async () => {
+    await render(<HomeScreen />);
+
+    await fireEvent.press(screen.getByTestId('quick-suggestion-general-hello'));
+
+    expect(screen.getByTestId('message-editor').props.value).toBe('Hello.');
+    expect(engine.utterances).toHaveLength(0);
+  });
+});
+
 describe('Home screen in Simplified Mode', () => {
   beforeEach(() => {
     useAppStore.setState({
@@ -169,6 +201,7 @@ describe('Home screen in Simplified Mode', () => {
     expect(screen.queryByTestId('open-phrases')).toBeNull();
     expect(screen.queryByTestId('open-settings')).toBeNull();
     expect(screen.queryByTestId('open-home-cards')).toBeNull();
+    expect(screen.queryByText('Quick suggestions')).toBeNull();
   });
 
   it('offers an obvious way back to the full screen', async () => {

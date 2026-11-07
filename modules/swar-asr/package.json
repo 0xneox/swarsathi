@@ -1,0 +1,11 @@
+{
+  "name": "swar-asr",
+  "version": "0.1.0",
+  "description": "SwarSathi native Android on-device speech recognition bridge (Kotlin).",
+  "license": "Apache-2.0",
+  "private": true,
+  "main": "index.ts",
+  "peerDependencies": {
+    "expo": "*"
+  }
+}

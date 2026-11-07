@@ -75,6 +75,8 @@ class SwarTtsModule : Module() {
   private var initialisationFailure: String? = null
   private var permanentlyReleased = false
   private var activeUtteranceId: String? = null
+  /** File synthesis in flight: utteranceId, output path, and the promise to settle on completion. */
+  private var pendingSynthesis: Triple<String, String, Promise>? = null
 
   override fun definition() = ModuleDefinition {
     Name("SwarTts")
@@ -112,6 +114,10 @@ class SwarTtsModule : Module() {
 
     AsyncFunction("speak") { text: String, options: Map<String, Any?>, promise: Promise ->
       speakInternal(text, options, promise)
+    }
+
+    AsyncFunction("synthesizeToFile") { text: String, options: Map<String, Any?>, fileName: String, promise: Promise ->
+      synthesizeToFileInternal(text, options, fileName, promise)
     }
 
     AsyncFunction("stop") {
@@ -274,6 +280,74 @@ class SwarTtsModule : Module() {
     }
   }
 
+  /**
+   * Renders an utterance to an audio file in the app's cache directory instead of playing it.
+   * Used by Connect's "share as audio": the file is handed to the system share sheet.
+   */
+  private fun synthesizeToFileInternal(
+    text: String,
+    options: Map<String, Any?>,
+    fileName: String,
+    promise: Promise
+  ) {
+    val message = text.trim()
+    if (message.isEmpty()) {
+      promise.reject(SwarTtsInvalidRequestException("There is nothing to speak: the message is empty."))
+      return
+    }
+    val safeName = fileName.replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "speech.wav" }
+
+    mainHandler.post {
+      val current = engine
+      if (current == null || !engineReady) {
+        promise.reject(SwarTtsNotInitializedException())
+        return@post
+      }
+      val context = appContext.reactContext
+      if (context == null) {
+        promise.reject(SwarTtsUnavailableException("The Android application context is not available."))
+        return@post
+      }
+
+      val rate = ((options["rate"] as? Number)?.toFloat() ?: 1.0f).coerceIn(0.1f, 3.0f)
+      val pitch = ((options["pitch"] as? Number)?.toFloat() ?: 1.0f).coerceIn(0.1f, 3.0f)
+      val languageTag = (options["language"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
+      val voiceId = (options["voiceId"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
+
+      val selection = resolveSelection(current, languageTag, voiceId)
+      selection.error?.let { error ->
+        promise.reject(error)
+        return@post
+      }
+
+      current.setSpeechRate(rate)
+      current.setPitch(pitch)
+      val voice = selection.voice
+      if (voice != null) {
+        current.setVoice(voice)
+      } else if (languageTag != null) {
+        current.setLanguage(Locale.forLanguageTag(languageTag))
+      }
+
+      val file = java.io.File(context.cacheDir, safeName)
+      if (file.exists()) {
+        file.delete()
+      }
+      val utteranceId = UUID.randomUUID().toString()
+      val result = current.synthesizeToFile(message, Bundle(), file, utteranceId)
+      if (result == TextToSpeech.SUCCESS) {
+        // Synthesis is asynchronous: the file is only complete when the utterance's progress
+        // callback fires. Hold the promise until then — resolving early would hand JavaScript a
+        // path to a file that does not exist yet.
+        pendingSynthesis = Triple(utteranceId, "file://${file.absolutePath}", promise)
+      } else {
+        promise.reject(
+          SwarTtsSpeakFailedException("The installed speech engine could not create the audio file.")
+        )
+      }
+    }
+  }
+
   private fun stopInternal() {
     mainHandler.post {
       activeUtteranceId = null
@@ -302,6 +376,10 @@ class SwarTtsModule : Module() {
       engine = null
       engineReady = false
       activeUtteranceId = null
+      pendingSynthesis?.third?.reject(
+        SwarTtsUnavailableException("The speech engine was released before the audio file finished.")
+      )
+      pendingSynthesis = null
       if (!permanent) {
         initialisationFailure = null
       }
@@ -429,6 +507,7 @@ class SwarTtsModule : Module() {
       if (activeUtteranceId == utteranceId) {
         activeUtteranceId = null
       }
+      settleSynthesis(utteranceId) { path, promise -> promise.resolve(path) }
       emit(EVENT_DONE, utteranceId)
     }
 
@@ -437,12 +516,22 @@ class SwarTtsModule : Module() {
       if (activeUtteranceId == utteranceId) {
         activeUtteranceId = null
       }
+      settleSynthesis(utteranceId) { _, promise ->
+        promise.reject(
+          SwarTtsSpeakFailedException("The speech engine failed while creating the audio file.")
+        )
+      }
       emit(EVENT_ERROR, utteranceId, errorCode = -1)
     }
 
     override fun onError(utteranceId: String?, errorCode: Int) {
       if (activeUtteranceId == utteranceId) {
         activeUtteranceId = null
+      }
+      settleSynthesis(utteranceId) { _, promise ->
+        promise.reject(
+          SwarTtsSpeakFailedException("The speech engine failed while creating the audio file (code $errorCode).")
+        )
       }
       emit(EVENT_ERROR, utteranceId, errorCode = errorCode)
     }
@@ -451,10 +540,32 @@ class SwarTtsModule : Module() {
       if (activeUtteranceId == utteranceId) {
         activeUtteranceId = null
       }
+      if (interrupted) {
+        settleSynthesis(utteranceId) { _, promise ->
+          promise.reject(
+            SwarTtsSpeakFailedException("Audio creation was interrupted before the file was finished.")
+          )
+        }
+      } else {
+        settleSynthesis(utteranceId) { path, promise -> promise.resolve(path) }
+      }
       val payload = basePayload(utteranceId)
       payload.putBoolean("interrupted", interrupted)
       sendEvent(EVENT_STOPPED, payload)
     }
+  }
+
+  /** Resolves or rejects the in-flight file synthesis when its utterance reaches a terminal state. */
+  private fun settleSynthesis(
+    utteranceId: String?,
+    settle: (path: String, promise: Promise) -> Unit
+  ) {
+    val pending = pendingSynthesis ?: return
+    if (utteranceId == null || utteranceId != pending.first) {
+      return
+    }
+    pendingSynthesis = null
+    settle(pending.second, pending.third)
   }
 
   private fun basePayload(utteranceId: String?): Bundle {

@@ -2,11 +2,17 @@ import { DEFAULT_PREFERENCES, type SpeechEngineId, type UserPreferences } from '
 import { clampHistoryLimit } from '../../data/communication';
 import { logger } from '../../utils/logger';
 import { getDatabase } from './database';
+import { DEFAULT_PROFILE_ID, getActiveProfileId } from './profileScope';
 
 const SCOPE = 'Storage';
-const PREFERENCES_ROW_ID = 1;
 
-/** Persistence for the settings that must survive an application restart. */
+/**
+ * Persistence for one profile's settings.
+ *
+ * From Part 5 the settings belong to a profile rather than to the device: a row in
+ * `profile_preferences` is keyed by the profile id the store has made active. `user_preferences`
+ * from Part 1 is migrated into the default profile's row by migration 5 and is no longer written.
+ */
 export interface PreferencesRepository {
   load(): Promise<UserPreferences>;
   save(preferences: UserPreferences): Promise<void>;
@@ -65,8 +71,9 @@ export class SqlitePreferencesRepository implements PreferencesRepository {
     try {
       const database = await getDatabase();
       const row = await database.getFirstAsync<PreferenceRow>(
-        'SELECT engineId, language, speechRate, pitch, voiceId, fontScale, highContrast, simplifiedMode, historyLimit FROM user_preferences WHERE id = $id',
-        { $id: PREFERENCES_ROW_ID }
+        `SELECT engineId, language, speechRate, pitch, voiceId, fontScale, highContrast, simplifiedMode, historyLimit
+           FROM profile_preferences WHERE profileId = $profileId`,
+        { $profileId: getActiveProfileId() }
       );
       if (!row) {
         return { ...DEFAULT_PREFERENCES };
@@ -93,9 +100,10 @@ export class SqlitePreferencesRepository implements PreferencesRepository {
     const normalized = normalizePreferences(preferences);
     const database = await getDatabase();
     await database.runAsync(
-      `INSERT INTO user_preferences (id, engineId, language, speechRate, pitch, voiceId, fontScale, highContrast, simplifiedMode, historyLimit)
-       VALUES ($id, $engineId, $language, $speechRate, $pitch, $voiceId, $fontScale, $highContrast, $simplifiedMode, $historyLimit)
-       ON CONFLICT(id) DO UPDATE SET
+      `INSERT INTO profile_preferences
+         (profileId, engineId, language, speechRate, pitch, voiceId, fontScale, highContrast, simplifiedMode, historyLimit)
+       VALUES ($profileId, $engineId, $language, $speechRate, $pitch, $voiceId, $fontScale, $highContrast, $simplifiedMode, $historyLimit)
+       ON CONFLICT(profileId) DO UPDATE SET
          engineId = excluded.engineId,
          language = excluded.language,
          speechRate = excluded.speechRate,
@@ -106,7 +114,7 @@ export class SqlitePreferencesRepository implements PreferencesRepository {
          simplifiedMode = excluded.simplifiedMode,
          historyLimit = excluded.historyLimit`,
       {
-        $id: PREFERENCES_ROW_ID,
+        $profileId: getActiveProfileId(),
         $engineId: normalized.engineId,
         $language: normalized.language,
         $speechRate: normalized.speechRate,
@@ -121,19 +129,25 @@ export class SqlitePreferencesRepository implements PreferencesRepository {
   }
 }
 
-/** In-memory preferences store used when the database is unavailable (and by tests). */
+/**
+ * In-memory preferences store used when the database is unavailable (and by tests).
+ *
+ * Keyed by profile like the SQLite store, so the two implementations behave identically when a test
+ * switches profiles.
+ */
 export class InMemoryPreferencesRepository implements PreferencesRepository {
-  private preferences: UserPreferences;
+  private readonly byProfile = new Map<string, UserPreferences>();
 
   constructor(initial: UserPreferences = { ...DEFAULT_PREFERENCES }) {
-    this.preferences = normalizePreferences(initial);
+    this.byProfile.set(DEFAULT_PROFILE_ID, normalizePreferences(initial));
   }
 
   async load(): Promise<UserPreferences> {
-    return { ...this.preferences };
+    const stored = this.byProfile.get(getActiveProfileId());
+    return { ...(stored ?? DEFAULT_PREFERENCES) };
   }
 
   async save(preferences: UserPreferences): Promise<void> {
-    this.preferences = normalizePreferences(preferences);
+    this.byProfile.set(getActiveProfileId(), normalizePreferences(preferences));
   }
 }

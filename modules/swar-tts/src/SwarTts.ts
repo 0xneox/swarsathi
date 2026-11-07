@@ -40,6 +40,8 @@ export type SwarTtsNativeModule = {
   getDefaultLanguageTag(): Promise<string>;
   /** Resolves with the utterance id that was queued. */
   speak(text: string, options: NativeSpeakOptions): Promise<string>;
+  /** Renders speech to a file in the app cache and resolves with its `file://` path. */
+  synthesizeToFile(text: string, options: NativeSpeakOptions, fileName: string): Promise<string>;
   stop(): Promise<void>;
   release(): Promise<void>;
 } & EventEmitter<SwarTtsEvents>;

@@ -56,6 +56,7 @@ describe('appStore rapid communication', () => {
       emergencyMessages: [],
       communicationHistory: [],
       frequentMessages: [],
+      messageUsage: [],
       bootstrapStatus: 'ready',
       storageAvailable: true,
     });

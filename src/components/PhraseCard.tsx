@@ -26,10 +26,27 @@ export interface PhraseCardProps {
   onMoveUp?: () => void;
   /** Supplied on the favourites screen to move this entry one place later. */
   onMoveDown?: () => void;
+  /** Supplied on the favourites screen to jump this entry straight to the top of the list. */
+  onMoveTop?: () => void;
   /** True when this entry is already first in the list. */
   moveUpDisabled?: boolean;
   /** True when this entry is already last in the list. */
   moveDownDisabled?: boolean;
+  /** True when this entry is already first in the list. */
+  moveTopDisabled?: boolean;
+  /** How many times this entry has been spoken. Omitted when the count is unknown or zero. */
+  usageCount?: number;
+  /**
+   * Replaces the default "speaks this phrase" press hint. Used where pressing does something else,
+   * such as the favourites reorder mode, so the hint never promises speech that will not happen.
+   */
+  pressHint?: string;
+  /** Draws a ring and marks the card as selected, for the favourites reorder mode. */
+  highlighted?: boolean;
+  /** Draws a ring, adds a tick badge and reports the card as selected, for pick-and-delete mode. */
+  selected?: boolean;
+  /** Renders the message in a smaller size so more of a long list fits on screen. */
+  compact?: boolean;
   testID?: string;
 }
 
@@ -53,29 +70,46 @@ export function PhraseCard({
   onToggleFavourite,
   onMoveUp,
   onMoveDown,
+  onMoveTop,
   moveUpDisabled = false,
   moveDownDisabled = false,
+  moveTopDisabled = false,
+  usageCount,
+  pressHint,
+  highlighted = false,
+  selected = false,
+  compact = false,
   testID,
 }: PhraseCardProps) {
   const theme = useTheme();
   const [focused, setFocused] = useState(false);
   const hasActions = Boolean(
-    onEdit || onDelete || onToggleFavourite || onMoveUp || onMoveDown
+    onEdit || onDelete || onToggleFavourite || onMoveUp || onMoveDown || onMoveTop
   );
+
+  const usageText =
+    usageCount && usageCount > 0
+      ? `Used ${usageCount} ${usageCount === 1 ? 'time' : 'times'}.`
+      : null;
 
   const described = [
     title ? `Saved message titled ${title}.` : null,
     text,
     `Category: ${categoryLabel}.`,
     favourite ? 'Saved to favourites.' : 'Not saved to favourites.',
+    highlighted ? 'Picked up.' : null,
+    selected ? 'Selected.' : null,
+    usageText,
     languageLabel ? `Spoken in ${languageLabel}.` : null,
   ]
     .filter(Boolean)
     .join(' ');
 
-  const hint = onLongPress
-    ? 'Speaks this phrase out loud. Press and hold to save it to favourites.'
-    : 'Speaks this phrase out loud.';
+  const hint =
+    pressHint ??
+    (onLongPress
+      ? 'Speaks this phrase out loud. Press and hold to save it to favourites.'
+      : 'Speaks this phrase out loud.');
 
   return (
     <View
@@ -83,8 +117,9 @@ export function PhraseCard({
         styles.card,
         {
           backgroundColor: theme.colors.surface,
-          borderColor: focused ? theme.colors.focusRing : theme.colors.border,
-          borderWidth: focused ? 3 : theme.mode === 'high-contrast' ? 2 : 1,
+          borderColor:
+            focused || highlighted || selected ? theme.colors.focusRing : theme.colors.border,
+          borderWidth: focused || highlighted || selected ? 3 : theme.mode === 'high-contrast' ? 2 : 1,
           borderRadius: theme.radius.lg,
         },
       ]}
@@ -96,6 +131,7 @@ export function PhraseCard({
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         accessibilityRole="button"
+        accessibilityState={{ selected: highlighted || selected }}
         accessibilityLabel={described}
         accessibilityHint={hint}
         android_ripple={{ color: theme.colors.surfaceMuted }}
@@ -119,23 +155,53 @@ export function PhraseCard({
           >
             {categoryLabel}
           </Text>
-          {favourite ? (
-            <Text
-              style={{
-                color: theme.colors.text,
-                fontSize: theme.fontSizes.caption * theme.fontScale,
-                fontWeight: '800',
-                borderColor: theme.colors.border,
-                borderWidth: theme.mode === 'high-contrast' ? 2 : 1,
-                borderRadius: theme.radius.pill,
-                paddingHorizontal: theme.spacing.sm,
-                paddingVertical: 2,
-                overflow: 'hidden',
-              }}
-            >
-              Favourite
-            </Text>
-          ) : null}
+          <View style={[styles.badges, { gap: theme.spacing.sm }]}>
+            {usageText ? (
+              <Text
+                style={{
+                  color: theme.colors.textMuted,
+                  fontSize: theme.fontSizes.caption * theme.fontScale,
+                  fontWeight: '700',
+                }}
+              >
+                {`Used ${usageCount}${usageCount === 1 ? ' time' : ' times'}`}
+              </Text>
+            ) : null}
+            {selected ? (
+              <Text
+                style={{
+                  color: theme.colors.text,
+                  fontSize: theme.fontSizes.caption * theme.fontScale,
+                  fontWeight: '800',
+                  borderColor: theme.colors.border,
+                  borderWidth: theme.mode === 'high-contrast' ? 2 : 1,
+                  borderRadius: theme.radius.pill,
+                  paddingHorizontal: theme.spacing.sm,
+                  paddingVertical: 2,
+                  overflow: 'hidden',
+                }}
+              >
+                ✓ Selected
+              </Text>
+            ) : null}
+            {favourite ? (
+              <Text
+                style={{
+                  color: theme.colors.text,
+                  fontSize: theme.fontSizes.caption * theme.fontScale,
+                  fontWeight: '800',
+                  borderColor: theme.colors.border,
+                  borderWidth: theme.mode === 'high-contrast' ? 2 : 1,
+                  borderRadius: theme.radius.pill,
+                  paddingHorizontal: theme.spacing.sm,
+                  paddingVertical: 2,
+                  overflow: 'hidden',
+                }}
+              >
+                Favourite
+              </Text>
+            ) : null}
+          </View>
         </View>
 
         {title ? (
@@ -154,7 +220,7 @@ export function PhraseCard({
         <Text
           style={{
             color: theme.colors.text,
-            fontSize: theme.fontSizes.title * theme.fontScale,
+            fontSize: (compact ? theme.fontSizes.body : theme.fontSizes.title) * theme.fontScale,
             fontWeight: '600',
             marginTop: theme.spacing.xs,
           }}
@@ -187,6 +253,15 @@ export function PhraseCard({
             },
           ]}
         >
+          {onMoveTop ? (
+            <CardAction
+              label="Move to top"
+              variant="secondary"
+              onPress={onMoveTop}
+              disabled={moveTopDisabled}
+              testID={testID ? `${testID}-move-top` : undefined}
+            />
+          ) : null}
           {onMoveUp ? (
             <CardAction
               label="Move up"
@@ -311,6 +386,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
+  },
+  badges: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 1,
   },
   actions: {
     flexDirection: 'row',

@@ -67,6 +67,8 @@ export class SpeechController {
   private readonly listeners = new Set<SpeechControllerListener>();
   private engineUnsubscribe: (() => void) | null = null;
   private initialisation: Promise<void> | null = null;
+  /** True once an attempt has actually run, so a later Speak press can be treated as a retry. */
+  private initialisationAttempted = false;
   private disposed = false;
 
   /**
@@ -104,6 +106,10 @@ export class SpeechController {
    *
    * Failures are captured into the state rather than thrown, so a missing or broken speech engine
    * degrades into a clear message instead of a crash.
+   *
+   * A failed attempt is deliberately NOT cached. Android's speech engine can fail to start during a
+   * cold boot, or while another app holds the synthesis service, and then succeed moments later; if
+   * the failure were remembered the app would stay silent until it was killed and reopened.
    */
   async initialize(): Promise<void> {
     if (this.disposed) {
@@ -116,11 +122,21 @@ export class SpeechController {
       return this.initialisation;
     }
 
-    this.initialisation = this.runInitialisation();
-    return this.initialisation;
+    const attempt = this.runInitialisation();
+    this.initialisation = attempt;
+    try {
+      await attempt;
+    } finally {
+      // Only the attempt that is still current clears the slot, so a caller that joined an in-flight
+      // attempt cannot drop a newer one.
+      if (this.initialisation === attempt) {
+        this.initialisation = null;
+      }
+    }
   }
 
   private async runInitialisation(): Promise<void> {
+    this.initialisationAttempted = true;
     this.patch({ status: 'initializing', error: null, speaking: false });
 
     const listener: SpeechEngineListener = {
@@ -129,6 +145,9 @@ export class SpeechController {
       onStopped: (utteranceId, interrupted) => this.handleStopped(utteranceId, interrupted),
       onError: (error) => this.handleErrorEvent(error),
     };
+    // Re-subscribing on a retry would leave the previous listener attached and deliver every engine
+    // event twice.
+    this.engineUnsubscribe?.();
     this.engineUnsubscribe = this.engine.subscribe(listener);
 
     try {
@@ -139,7 +158,13 @@ export class SpeechController {
     } catch (error) {
       const info = toSpeechErrorInfo(error);
       this.patch({ status: 'error', error: info, speaking: false });
-      logger.warn(SCOPE, `Engine initialisation failed: ${info.code}`);
+      // The code alone cannot be acted on, so the hint (why it failed and the next step) is logged
+      // too. Nothing about a spoken message is ever logged.
+      logger.warn(
+        SCOPE,
+        `Engine initialisation failed: ${info.code} - ${info.message}`,
+        info.hint
+      );
     }
   }
 
@@ -189,11 +214,22 @@ export class SpeechController {
       return;
     }
 
+    if (!this.engine.isInitialized() && this.initialisationAttempted && !this.disposed) {
+      // Start-up already failed once (no engine, a busy one, or one that was still waking). Pressing
+      // Speak is the user's retry, so give the engine one more chance before refusing; this is what
+      // lets speech recover without the user having to kill and reopen the app.
+      await this.initialize();
+      if (request !== this.requestSequence) {
+        return;
+      }
+    }
+
     if (!this.engine.isInitialized()) {
       this.patch({
         status: 'error',
         speaking: false,
-        error: {
+        // Keep the real reason from a failed start-up instead of replacing it with a vaguer one.
+        error: this.state.error ?? {
           code: 'ENGINE_NOT_INITIALIZED',
           message: 'The speech engine is still starting up.',
           hint: 'Wait a moment, then press Speak again.',
@@ -230,6 +266,29 @@ export class SpeechController {
       });
       logger.warn(SCOPE, `Speak failed: ${info.code}`);
     }
+  }
+
+  /**
+   * Speaks one utterance and resolves when it finishes, is stopped, or fails.
+   *
+   * Used by the Part 6 message renderer, which may need to speak a mixed-language message as
+   * several ordered utterances. Each call still goes through `speak`, so every safety rule
+   * (superseding, stale events, voice honesty) applies unchanged.
+   */
+  async speakAndWait(text: string, options: SpeechOptions): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
+    const finished = new Promise<void>((resolve) => {
+      const unsubscribe = this.subscribe((state) => {
+        if (!state.speaking && state.status !== 'speaking') {
+          unsubscribe();
+          resolve();
+        }
+      });
+    });
+    await this.speak(text, options);
+    await finished;
   }
 
   /**

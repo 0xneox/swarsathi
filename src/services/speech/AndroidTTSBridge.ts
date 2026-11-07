@@ -108,6 +108,24 @@ export class AndroidTTSBridge {
     }
   }
 
+  /** Renders speech to an audio file in the app cache; resolves with its `file://` path. */
+  async synthesizeToFile(text: string, options: SpeechOptions, fileName: string): Promise<string> {
+    const module = this.requireModule();
+    const nativeOptions: NativeSpeakOptions = {
+      language: options.language,
+      rate: options.rate,
+      pitch: options.pitch,
+    };
+    if (options.voiceId) {
+      nativeOptions.voiceId = options.voiceId;
+    }
+    try {
+      return await module.synthesizeToFile(text, nativeOptions, fileName);
+    } catch (error) {
+      throw mapNativeError(error);
+    }
+  }
+
   async stop(): Promise<void> {
     if (!SwarTts) {
       return;

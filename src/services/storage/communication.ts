@@ -11,6 +11,7 @@ import type {
 } from '../../types';
 import { logger } from '../../utils/logger';
 import { getDatabase } from './database';
+import { getActiveProfileId } from './profileScope';
 
 const SCOPE = 'Storage';
 
@@ -21,11 +22,15 @@ const SCOPE = 'Storage';
  * layout is configuration, the history is disposable, the frequency table is a counter, and the
  * emergency overrides are user-authored wording. Each has a SQLite implementation used by the app
  * and an in-memory implementation used when the database cannot be opened (and by the tests).
+ *
+ * The card layout and the emergency wording belong to a profile from Part 5, so those two are
+ * scoped by the active profile. The history and the frequency table are a record of what was said
+ * and stay with the device: they are never exported and never shared.
  */
 
 // region Home cards
 
-/** Persistence for which quick cards appear on Home and in what order. */
+/** Persistence for which quick cards appear on Home and in what order, for one profile. */
 export interface HomeCardRepository {
   list(): Promise<HomeCardConfig[]>;
   /** Writes the whole configuration. Unknown keys are ignored, not deleted. */
@@ -46,36 +51,46 @@ export class SqliteHomeCardRepository implements HomeCardRepository {
   async list(): Promise<HomeCardConfig[]> {
     const database = await getDatabase();
     const rows = await database.getAllAsync<HomeCardRow>(
-      'SELECT key, sortOrder, enabled FROM home_cards ORDER BY sortOrder ASC',
-      []
+      'SELECT key, sortOrder, enabled FROM profile_home_cards WHERE profileId = $profileId ORDER BY sortOrder ASC',
+      { $profileId: getActiveProfileId() }
     );
     return rows.map(rowToHomeCard);
   }
 
   async replaceAll(configs: HomeCardConfig[]): Promise<void> {
     const database = await getDatabase();
+    const profileId = getActiveProfileId();
     for (const config of configs) {
       await database.runAsync(
-        `INSERT INTO home_cards (key, sortOrder, enabled)
-         VALUES ($key, $sortOrder, $enabled)
-         ON CONFLICT(key) DO UPDATE SET
+        `INSERT INTO profile_home_cards (profileId, key, sortOrder, enabled)
+         VALUES ($profileId, $key, $sortOrder, $enabled)
+         ON CONFLICT(profileId, key) DO UPDATE SET
            sortOrder = excluded.sortOrder,
            enabled = excluded.enabled`,
-        { $key: config.key, $sortOrder: config.sortOrder, $enabled: config.enabled ? 1 : 0 }
+        {
+          $profileId: profileId,
+          $key: config.key,
+          $sortOrder: config.sortOrder,
+          $enabled: config.enabled ? 1 : 0,
+        }
       );
     }
   }
 }
 
 export class InMemoryHomeCardRepository implements HomeCardRepository {
-  private configs: HomeCardConfig[] | null = null;
+  private readonly byProfile = new Map<string, HomeCardConfig[]>();
 
   async list(): Promise<HomeCardConfig[]> {
-    return (this.configs ?? defaultHomeCardConfigs()).map((config) => ({ ...config }));
+    const stored = this.byProfile.get(getActiveProfileId());
+    return (stored ?? defaultHomeCardConfigs()).map((config) => ({ ...config }));
   }
 
   async replaceAll(configs: HomeCardConfig[]): Promise<void> {
-    this.configs = configs.map((config) => ({ ...config }));
+    this.byProfile.set(
+      getActiveProfileId(),
+      configs.map((config) => ({ ...config }))
+    );
   }
 }
 
@@ -117,7 +132,8 @@ function coerceSource(value: string): CommunicationSource {
     value === 'emergency' ||
     value === 'editor' ||
     value === 'phrase' ||
-    value === 'history'
+    value === 'history' ||
+    value === 'aac'
     ? value
     : 'editor';
 }
@@ -311,7 +327,7 @@ export interface EmergencyOverride {
   updatedAt: number;
 }
 
-/** Persistence for the user's edited emergency wording. */
+/** Persistence for the user's edited emergency wording, for one profile. */
 export interface EmergencyMessageRepository {
   list(): Promise<EmergencyOverride[]>;
   save(override: EmergencyOverride): Promise<void>;
@@ -331,8 +347,8 @@ export class SqliteEmergencyMessageRepository implements EmergencyMessageReposit
   async list(): Promise<EmergencyOverride[]> {
     const database = await getDatabase();
     const rows = await database.getAllAsync<EmergencyRow>(
-      'SELECT id, language, text, updatedAt FROM emergency_messages',
-      []
+      'SELECT id, language, text, updatedAt FROM profile_emergency_messages WHERE profileId = $profileId',
+      { $profileId: getActiveProfileId() }
     );
     return rows.map((row) => ({ ...row }));
   }
@@ -340,12 +356,13 @@ export class SqliteEmergencyMessageRepository implements EmergencyMessageReposit
   async save(override: EmergencyOverride): Promise<void> {
     const database = await getDatabase();
     await database.runAsync(
-      `INSERT INTO emergency_messages (id, language, text, updatedAt)
-       VALUES ($id, $language, $text, $updatedAt)
-       ON CONFLICT(id, language) DO UPDATE SET
+      `INSERT INTO profile_emergency_messages (profileId, id, language, text, updatedAt)
+       VALUES ($profileId, $id, $language, $text, $updatedAt)
+       ON CONFLICT(profileId, id, language) DO UPDATE SET
          text = excluded.text,
          updatedAt = excluded.updatedAt`,
       {
+        $profileId: getActiveProfileId(),
         $id: override.id,
         $language: override.language,
         $text: override.text,
@@ -357,40 +374,57 @@ export class SqliteEmergencyMessageRepository implements EmergencyMessageReposit
   async remove(id: string, language: string): Promise<void> {
     const database = await getDatabase();
     await database.runAsync(
-      'DELETE FROM emergency_messages WHERE id = $id AND language = $language',
-      { $id: id, $language: language }
+      'DELETE FROM profile_emergency_messages WHERE profileId = $profileId AND id = $id AND language = $language',
+      { $profileId: getActiveProfileId(), $id: id, $language: language }
     );
   }
 
   async clear(): Promise<void> {
     const database = await getDatabase();
-    await database.runAsync('DELETE FROM emergency_messages', []);
+    await database.runAsync('DELETE FROM profile_emergency_messages WHERE profileId = $profileId', {
+      $profileId: getActiveProfileId(),
+    });
   }
 }
 
 export class InMemoryEmergencyMessageRepository implements EmergencyMessageRepository {
-  private overrides = new Map<string, EmergencyOverride>();
+  private readonly overrides = new Map<string, EmergencyOverride>();
 
-  private static key(id: string, language: string): string {
-    return `${id}::${language}`;
+  private static key(profileId: string, id: string, language: string): string {
+    return `${profileId}::${id}::${language}`;
   }
 
   async list(): Promise<EmergencyOverride[]> {
-    return [...this.overrides.values()].map((override) => ({ ...override }));
+    const profileId = getActiveProfileId();
+    return [...this.overrides.values()]
+      .filter((override) =>
+        this.overrides.has(
+          InMemoryEmergencyMessageRepository.key(profileId, override.id, override.language)
+        )
+      )
+      .map((override) => ({ ...override }));
   }
 
   async save(override: EmergencyOverride): Promise<void> {
-    this.overrides.set(InMemoryEmergencyMessageRepository.key(override.id, override.language), {
-      ...override,
-    });
+    this.overrides.set(
+      InMemoryEmergencyMessageRepository.key(getActiveProfileId(), override.id, override.language),
+      { ...override }
+    );
   }
 
   async remove(id: string, language: string): Promise<void> {
-    this.overrides.delete(InMemoryEmergencyMessageRepository.key(id, language));
+    this.overrides.delete(
+      InMemoryEmergencyMessageRepository.key(getActiveProfileId(), id, language)
+    );
   }
 
   async clear(): Promise<void> {
-    this.overrides.clear();
+    const profileId = getActiveProfileId();
+    for (const override of [...this.overrides.values()]) {
+      this.overrides.delete(
+        InMemoryEmergencyMessageRepository.key(profileId, override.id, override.language)
+      );
+    }
   }
 }
 

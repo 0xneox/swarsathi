@@ -60,6 +60,24 @@ describe('SpeechController.initialize', () => {
     expect(engine.initializeCalls).toBe(1);
   });
 
+  it('retries initialisation after a failure instead of staying silent for the session', async () => {
+    const engine = new MockSpeechEngine();
+    engine.initError = createSpeechError('ENGINE_UNAVAILABLE', 'The engine was not ready yet.');
+    const { controller } = createHarness(engine);
+
+    await controller.initialize();
+    expect(controller.getState().status).toBe('error');
+
+    // The engine recovers, for example because Android finished starting it a moment later.
+    engine.initError = null;
+
+    await controller.initialize();
+
+    expect(engine.initializeCalls).toBe(2);
+    expect(controller.getState().status).toBe('ready');
+    expect(controller.getState().error).toBeNull();
+  });
+
   it('notifies subscribers when state changes', async () => {
     const { controller } = createHarness();
     const seen: string[] = [];
@@ -104,6 +122,34 @@ describe('SpeechController.speak', () => {
 
     expect(engine.utterances).toHaveLength(0);
     expect(controller.getState().error?.code).toBe('ENGINE_NOT_INITIALIZED');
+  });
+
+  it('uses a Speak press to retry start-up after a failure, so speech can recover', async () => {
+    const engine = new MockSpeechEngine();
+    engine.initError = createSpeechError('ENGINE_UNAVAILABLE', 'The engine was not ready yet.');
+    const { controller } = createHarness(engine);
+
+    await controller.initialize();
+    expect(controller.getState().status).toBe('error');
+
+    engine.initError = null;
+
+    await controller.speak('Hello', OPTIONS);
+
+    expect(engine.lastUtterance?.text).toBe('Hello');
+    expect(controller.getState().speaking).toBe(true);
+  });
+
+  it('keeps the real start-up reason when a Speak retry also fails', async () => {
+    const engine = new MockSpeechEngine();
+    engine.initError = createSpeechError('ENGINE_UNAVAILABLE', 'No text-to-speech engine is enabled.');
+    const { controller } = createHarness(engine);
+
+    await controller.initialize();
+    await controller.speak('Hello', OPTIONS);
+
+    expect(engine.utterances).toHaveLength(0);
+    expect(controller.getState().error?.code).toBe('ENGINE_UNAVAILABLE');
   });
 
   it('prevents concurrent speech by stopping the previous utterance first', async () => {

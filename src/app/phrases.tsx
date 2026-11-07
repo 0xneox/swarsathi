@@ -1,10 +1,12 @@
 import { Stack } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
-import { FlatList, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CategoryFilter, type CategorySelection } from '../components/CategoryFilter';
 import { LanguageNotice } from '../components/LanguageNotice';
 import { LanguageSelector } from '../components/LanguageSelector';
 import { PhraseCard } from '../components/PhraseCard';
+import { Toast } from '../components/Toast';
 import { LANGUAGES, getLanguageByCode } from '../data/languages';
 import { PHRASE_CATEGORIES, PHRASE_CATEGORY_LABELS, TRANSLATIONS_REVIEWED } from '../data/phrases';
 import { useTheme } from '../providers/ThemeProvider';
@@ -17,10 +19,16 @@ import type { Phrase } from '../types';
  * Long pressing a phrase saves it to Favourites; tapping speaks it straight away in the language
  * that is on screen. The whole screen is driven by the active language, so switching language here
  * changes what is displayed and what the SpeechController is asked to say.
+ *
+ * The search field narrows the list within the chosen category rather than replacing it, so the
+ * category chips keep working as a way to browse and search is only ever an extra filter on top.
  */
 export default function QuickPhrasesScreen() {
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const [selectedCategory, setSelectedCategory] = useState<CategorySelection>('all');
+  const [query, setQuery] = useState('');
+  const [toast, setToast] = useState<string | null>(null);
 
   const phrases = useAppStore((state) => state.phrases);
   const favourites = useAppStore((state) => state.favourites);
@@ -43,13 +51,27 @@ export default function QuickPhrasesScreen() {
     return map;
   }, [favourites]);
 
-  const visiblePhrases = useMemo(
-    () =>
+  /** How many phrases each chip would show, counted across the whole library for the active language. */
+  const categoryCounts = useMemo(() => {
+    const counts: Partial<Record<CategorySelection, number>> = { all: phrases.length };
+    phrases.forEach((phrase) => {
+      counts[phrase.category] = (counts[phrase.category] ?? 0) + 1;
+    });
+    return counts;
+  }, [phrases]);
+
+  const normalizedQuery = query.trim().toLowerCase();
+
+  const visiblePhrases = useMemo(() => {
+    const inCategory =
       selectedCategory === 'all'
         ? phrases
-        : phrases.filter((phrase) => phrase.category === selectedCategory),
-    [phrases, selectedCategory]
-  );
+        : phrases.filter((phrase) => phrase.category === selectedCategory);
+    if (!normalizedQuery) {
+      return inCategory;
+    }
+    return inCategory.filter((phrase) => phrase.text.toLowerCase().includes(normalizedQuery));
+  }, [phrases, selectedCategory, normalizedQuery]);
 
   const languageEntry = getLanguageByCode(language);
   const languageName = languageEntry?.englishName ?? language;
@@ -70,8 +92,10 @@ export default function QuickPhrasesScreen() {
       const existing = favouriteIdByPhrase.get(phrase.id);
       if (existing) {
         void removeFavourite(existing);
+        setToast('Removed from favourites');
       } else {
         void addPhraseFavourite(phrase.id);
+        setToast('Saved to favourites');
       }
     },
     [favouriteIdByPhrase, removeFavourite, addPhraseFavourite]
@@ -97,6 +121,66 @@ export default function QuickPhrasesScreen() {
           translationsReviewed={language === 'en-IN' ? true : TRANSLATIONS_REVIEWED}
         />
 
+        <View
+          style={[
+            styles.searchRow,
+            {
+              backgroundColor: theme.colors.surface,
+              borderColor: theme.colors.border,
+              borderWidth: theme.mode === 'high-contrast' ? 2 : 1,
+              borderRadius: theme.radius.md,
+              paddingHorizontal: theme.spacing.md,
+              gap: theme.spacing.sm,
+            },
+          ]}
+        >
+          <TextInput
+            testID="phrase-search"
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Search phrases..."
+            placeholderTextColor={theme.colors.textMuted}
+            allowFontScaling
+            autoCorrect={false}
+            returnKeyType="search"
+            accessibilityLabel="Search phrases"
+            accessibilityHint="Narrows the list to phrases that contain what you type."
+            style={{
+              flex: 1,
+              minHeight: theme.minTouchTarget,
+              paddingVertical: theme.spacing.sm,
+              color: theme.colors.text,
+              fontSize: theme.fontSizes.body * theme.fontScale,
+            }}
+          />
+          {query.length > 0 ? (
+            <Pressable
+              testID="phrase-search-clear"
+              onPress={() => setQuery('')}
+              accessibilityRole="button"
+              accessibilityLabel="Clear search"
+              hitSlop={8}
+              style={{
+                minHeight: theme.minTouchTarget,
+                minWidth: theme.minTouchTarget,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <Text
+                allowFontScaling
+                style={{
+                  color: theme.colors.textMuted,
+                  fontSize: theme.fontSizes.body * theme.fontScale,
+                  fontWeight: '800',
+                }}
+              >
+                Clear
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
+
         <Text
           accessibilityRole="header"
           allowFontScaling
@@ -112,6 +196,7 @@ export default function QuickPhrasesScreen() {
           categories={PHRASE_CATEGORIES}
           selected={selectedCategory}
           onSelect={setSelectedCategory}
+          counts={categoryCounts}
         />
 
         <Text
@@ -134,6 +219,8 @@ export default function QuickPhrasesScreen() {
       availability,
       languageEntry,
       selectedCategory,
+      categoryCounts,
+      query,
     ]
   );
 
@@ -164,9 +251,17 @@ export default function QuickPhrasesScreen() {
               fontSize: theme.fontSizes.body * theme.fontScale,
             }}
           >
-            There are no phrases in this category yet.
+            {normalizedQuery
+              ? `No phrases match "${query.trim()}".`
+              : 'There are no phrases in this category yet.'}
           </Text>
         }
+      />
+      <Toast
+        testID="favourite-toast"
+        message={toast}
+        bottomOffset={insets.bottom + theme.spacing.lg}
+        onHidden={() => setToast(null)}
       />
     </View>
   );
@@ -179,5 +274,9 @@ const styles = StyleSheet.create({
   content: {
     padding: 16,
     paddingBottom: 48,
+  },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
 });

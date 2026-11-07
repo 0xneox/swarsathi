@@ -5,6 +5,7 @@ import {
   QUICK_MESSAGE_CATALOGUE,
   buildEmergencyMessages,
   buildHomeCards,
+  buildQuickSuggestions,
   clampHistoryLimit,
   communicationKey,
   defaultHomeCardConfigs,
@@ -13,6 +14,7 @@ import {
   rankFrequent,
   resolveEmergencyText,
   resolveHomeCard,
+  timeOfDayFor,
   trimHistory,
 } from '../../src/data/communication';
 import type { CommunicationEntry, FrequentMessage, HomeCardConfig } from '../../src/types';
@@ -169,5 +171,42 @@ describe('history helpers', () => {
       { key: 'c', text: 'C', language: 'en-IN', count: 5, lastSpokenAt: 50 },
     ];
     expect(rankFrequent(frequent).map((item) => item.key)).toEqual(['c', 'b', 'a']);
+  });
+});
+
+describe('time-of-day quick suggestions', () => {
+  it('maps each hour onto the part of the day it belongs to', () => {
+    expect(timeOfDayFor(7)).toBe('morning');
+    expect(timeOfDayFor(14)).toBe('afternoon');
+    expect(timeOfDayFor(19)).toBe('evening');
+    expect(timeOfDayFor(23)).toBe('night');
+    expect(timeOfDayFor(2)).toBe('night');
+  });
+
+  it('offers three suggestions', () => {
+    expect(buildQuickSuggestions('en-IN', 8)).toHaveLength(3);
+  });
+
+  it('offers the canonical English wording for English', () => {
+    expect(buildQuickSuggestions('en-IN', 8).map((suggestion) => suggestion.text)).toEqual([
+      'Hello.',
+      'Please give me some water.',
+      'I need food.',
+    ]);
+  });
+
+  it('speaks a translated phrase for the active language, then falls back to English', () => {
+    const [hello] = buildQuickSuggestions('ml-IN', 8);
+    expect(hello.text).toBe('നമസ്കാരം.');
+
+    // A language with no bundled draft still gets words to say rather than an empty chip.
+    const [fallback] = buildQuickSuggestions('fr-FR', 8);
+    expect(fallback.text).toBe('Hello.');
+  });
+
+  it('changes the suggestions with the time of day', () => {
+    const morning = buildQuickSuggestions('en-IN', 8).map((suggestion) => suggestion.id);
+    const night = buildQuickSuggestions('en-IN', 23).map((suggestion) => suggestion.id);
+    expect(morning).not.toEqual(night);
   });
 });

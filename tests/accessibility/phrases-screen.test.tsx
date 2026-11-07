@@ -11,6 +11,10 @@ jest.mock('expo-router', () => {
   };
 });
 
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
+}));
+
 import QuickPhrasesScreen from '../../src/app/phrases';
 import { buildPhraseRows } from '../../src/data/phrases';
 import { LANGUAGES } from '../../src/data/languages';
@@ -172,5 +176,87 @@ describe('Quick Phrases screen', () => {
     expect(screen.getByTestId('category-chip-medical').props.accessibilityState).toMatchObject({
       selected: false,
     });
+  });
+});
+
+describe('Quick Phrases search, counts and favourite feedback', () => {
+  it('shows how many phrases each chip would reveal', async () => {
+    await render(<QuickPhrasesScreen />);
+
+    const all = useAppStore.getState().phrases.length;
+    const medical = useAppStore.getState().phrases.filter(
+      (phrase) => phrase.category === 'medical'
+    ).length;
+
+    expect(screen.getByTestId('category-chip-all').props.accessibilityLabel).toContain(
+      `${all} phrases`
+    );
+    expect(screen.getByTestId('category-chip-medical').props.accessibilityLabel).toContain(
+      `${medical} phrases`
+    );
+  });
+
+  it('ticks the chosen category so selection is not signalled by colour alone', async () => {
+    await render(<QuickPhrasesScreen />);
+
+    expect(screen.getByText(/✓ All/)).toBeTruthy();
+
+    await fireEvent.press(screen.getByTestId('category-chip-medical'));
+
+    expect(screen.getByText(/✓ Medical/)).toBeTruthy();
+  });
+
+  it('narrows the list to the phrases that match what is typed', async () => {
+    await render(<QuickPhrasesScreen />);
+
+    await fireEvent.changeText(screen.getByTestId('phrase-search'), MEDICAL.text);
+
+    expect(screen.getByTestId(`phrase-${MEDICAL.id}`)).toBeTruthy();
+    expect(screen.queryByTestId(`phrase-${OTHER.id}`)).toBeNull();
+  });
+
+  it('offers a way to clear the search', async () => {
+    await render(<QuickPhrasesScreen />);
+
+    await fireEvent.changeText(screen.getByTestId('phrase-search'), 'water');
+    await fireEvent.press(screen.getByTestId('phrase-search-clear'));
+
+    expect(screen.getByTestId('phrase-search').props.value).toBe('');
+  });
+
+  it('says so when nothing matches the search', async () => {
+    await render(<QuickPhrasesScreen />);
+
+    await fireEvent.changeText(screen.getByTestId('phrase-search'), 'qwertyuiop');
+
+    expect(screen.getByText('No phrases match "qwertyuiop".')).toBeTruthy();
+  });
+
+  it('confirms a saved favourite with a toast', async () => {
+    await render(<QuickPhrasesScreen />);
+
+    await fireEvent(screen.getByTestId(`phrase-${MEDICAL.id}`), 'longPress');
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Saved to favourites', { includeHiddenElements: true })
+      ).toBeTruthy()
+    );
+  });
+
+  it('confirms a removed favourite with a toast', async () => {
+    await render(<QuickPhrasesScreen />);
+    const card = screen.getByTestId(`phrase-${MEDICAL.id}`);
+
+    await fireEvent(card, 'longPress');
+    await waitFor(() => expect(useAppStore.getState().isPhraseFavourite(MEDICAL.id)).toBe(true));
+
+    await fireEvent(card, 'longPress');
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Removed from favourites', { includeHiddenElements: true })
+      ).toBeTruthy()
+    );
   });
 });

@@ -31,6 +31,9 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
       if (next === 'background' || next === 'inactive') {
         logger.info(SCOPE, 'Application left the foreground; stopping speech if active');
         void controller.handleAppBackgrounded();
+        // Listening has the same lifecycle rule as speaking: leaving the foreground ends it. Cancel
+        // rather than stop, so a recogniser that is torn down does not surface a late result.
+        void useAppStore.getState().cancelDictation();
       }
     });
     return () => subscription.remove();

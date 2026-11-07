@@ -1,5 +1,5 @@
 import { Link } from 'expo-router';
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useMemo, useRef } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -19,7 +19,10 @@ import { NavCard } from '../components/NavCard';
 import { ReplayChip } from '../components/ReplayChip';
 import { SpeakButton } from '../components/SpeakButton';
 import { SpeechStatusBanner } from '../components/SpeechStatusBanner';
+import { SpokenToast } from '../components/SpokenToast';
 import { StopButton } from '../components/StopButton';
+import { SuggestionChip } from '../components/SuggestionChip';
+import { buildQuickSuggestions } from '../data/communication';
 import { LANGUAGES } from '../data/languages';
 import { useTheme } from '../providers/ThemeProvider';
 import { useAppStore } from '../store/appStore';
@@ -56,9 +59,23 @@ export default function HomeScreen() {
   const frequentMessages = useAppStore((state) => state.frequentMessages);
   const favouriteCount = useAppStore((state) => state.favouriteEntries.length);
   const savedMessageCount = useAppStore((state) => state.customMessages.length);
+  const profiles = useAppStore((state) => state.profiles);
+  const activeProfileId = useAppStore((state) => state.activeProfileId);
+  const boardCount = useAppStore((state) => state.boards.length);
+  const composedMessageCount = useAppStore((state) => state.composedMessages.length);
+
+  const activeProfile = profiles.find((profile) => profile.id === activeProfileId) ?? null;
 
   const simplified = preferences.simplifiedMode;
   const canSpeak = !isBlankMessage(message) && bootstrapStatus !== 'loading';
+
+  // Re-rolled when the language changes, so the chips are always in the words the phone will speak.
+  // The hour is read once per render rather than kept in state: a suggestion that is one breath
+  // out of date is not worth a timer.
+  const quickSuggestions = useMemo(
+    () => buildQuickSuggestions(preferences.language, new Date().getHours()),
+    [preferences.language]
+  );
 
   const handleSpeak = useCallback(() => {
     void speak();
@@ -147,6 +164,57 @@ export default function HomeScreen() {
             </Link>
           )}
         </View>
+
+        <Link href="/profiles" asChild>
+          <Pressable
+            testID="open-profiles"
+            accessibilityRole="button"
+            accessibilityLabel={
+              activeProfile
+                ? `Current profile: ${activeProfile.name}. Opens profiles.`
+                : 'Profiles. Opens profiles.'
+            }
+            accessibilityHint="Opens the profiles screen to switch or manage profiles."
+            android_ripple={{ color: theme.colors.surfaceMuted }}
+            style={({ pressed }) => ({
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: theme.spacing.sm,
+              minHeight: theme.minTouchTarget,
+              paddingHorizontal: theme.spacing.md,
+              paddingVertical: theme.spacing.sm,
+              marginBottom: theme.spacing.md,
+              backgroundColor: pressed ? theme.colors.surfaceMuted : theme.colors.surface,
+              borderColor: theme.colors.border,
+              borderWidth: theme.mode === 'high-contrast' ? 2 : 1,
+              borderRadius: theme.radius.lg,
+            })}
+          >
+            <Text
+              allowFontScaling
+              numberOfLines={1}
+              style={{
+                color: theme.colors.text,
+                fontSize: theme.fontSizes.body * theme.fontScale,
+                fontWeight: '700',
+                flexShrink: 1,
+              }}
+            >
+              {activeProfile ? `Speaking as: ${activeProfile.name}` : 'Profiles'}
+            </Text>
+            <Text
+              allowFontScaling
+              style={{
+                color: theme.colors.textMuted,
+                fontSize: theme.fontSizes.caption * theme.fontScale,
+                fontWeight: '800',
+              }}
+            >
+              Change
+            </Text>
+          </Pressable>
+        </Link>
 
         <Text
           style={{
@@ -277,8 +345,11 @@ export default function HomeScreen() {
               {
                 backgroundColor: pressed ? theme.colors.dangerPressed : theme.colors.danger,
                 borderRadius: theme.radius.lg,
-                minHeight: 72,
-                padding: theme.spacing.lg,
+                minHeight: 96,
+                paddingVertical: theme.spacing.lg,
+                paddingHorizontal: theme.spacing.xl,
+                borderColor: theme.mode === 'high-contrast' ? theme.colors.border : 'transparent',
+                borderWidth: theme.mode === 'high-contrast' ? 3 : 0,
               },
             ]}
           >
@@ -286,8 +357,9 @@ export default function HomeScreen() {
               allowFontScaling
               style={{
                 color: theme.colors.onDanger,
-                fontSize: theme.fontSizes.title * theme.fontScale,
+                fontSize: theme.fontSizes.heading * theme.fontScale,
                 fontWeight: '900',
+                letterSpacing: 1,
               }}
             >
               Emergency
@@ -296,7 +368,8 @@ export default function HomeScreen() {
               allowFontScaling
               style={{
                 color: theme.colors.onDanger,
-                fontSize: theme.fontSizes.caption * theme.fontScale,
+                fontSize: theme.fontSizes.body * theme.fontScale,
+                marginTop: theme.spacing.xs,
               }}
             >
               Medical help, ambulance, and other urgent messages. Works without internet.
@@ -390,6 +463,32 @@ export default function HomeScreen() {
             <View style={styles.spacer} />
 
             <Text accessibilityRole="header" style={headingStyle(theme)}>
+              Quick suggestions
+            </Text>
+            <Text
+              style={{
+                color: theme.colors.textMuted,
+                fontSize: theme.fontSizes.caption * theme.fontScale,
+                marginBottom: theme.spacing.sm,
+              }}
+            >
+              Tap one to start your message. Nothing is said until you press Speak.
+            </Text>
+            <View style={{ gap: theme.spacing.sm }}>
+              {quickSuggestions.map((suggestion) => (
+                <SuggestionChip
+                  key={suggestion.id}
+                  testID={`quick-suggestion-${suggestion.id}`}
+                  text={suggestion.text}
+                  meta={suggestion.categoryLabel}
+                  onPress={() => setMessage(suggestion.text)}
+                />
+              ))}
+            </View>
+
+            <View style={styles.spacer} />
+
+            <Text accessibilityRole="header" style={headingStyle(theme)}>
               Type anything
             </Text>
             <MessageEditor
@@ -407,6 +506,29 @@ export default function HomeScreen() {
               More ways to talk
             </Text>
             <View style={{ gap: theme.spacing.md }}>
+              <Link href="/compose" asChild>
+                <NavCard
+                  testID="open-compose"
+                  label="Compose"
+                  description="Build a message from typed words and symbols, then speak or share it."
+                  badge={composedMessageCount > 0 ? `${composedMessageCount}` : null}
+                />
+              </Link>
+              <Link href="/aac" asChild>
+                <NavCard
+                  testID="open-aac"
+                  label="Symbol Board"
+                  description="Tap picture symbols to build a sentence without typing."
+                />
+              </Link>
+              <Link href="/boards" asChild>
+                <NavCard
+                  testID="open-boards"
+                  label="Communication Boards"
+                  description="Situations like Medical, Food and Drink or Travel, each with its own cards."
+                  badge={boardCount > 0 ? `${boardCount}` : null}
+                />
+              </Link>
               <Link href="/phrases" asChild>
                 <NavCard
                   testID="open-phrases"
@@ -441,6 +563,10 @@ export default function HomeScreen() {
           </>
         )}
       </ScrollView>
+      <SpokenToast
+        status={speech.status}
+        bottomOffset={insets.bottom + theme.spacing.lg}
+      />
     </KeyboardAvoidingView>
   );
 }

@@ -1,0 +1,106 @@
+SwarSathi - Third-Party Notices
+===============================
+
+SwarSathi is an India-first, offline-capable AAC (augmentative and alternative
+communication) app. This file lists the third-party components the app depends
+on and the licence terms each is offered under. SwarSathi's own source code is
+covered by the separate LICENSE file (Apache-2.0); everything else is covered
+here.
+
+Top-level rule
+--------------
+
+SwarSathi itself is licensed under the Apache License 2.0. Nothing from these
+third parties is redistributed inside the APK: each artefact - artwork, voice
+model or phonemiser data - is fetched by the user directly from its publisher,
+only when they ask for it. The one component linked into the app is the
+permissively licensed sherpa-onnx runtime, which is compiled in rather than
+downloaded. No third-party artwork or voice is ever shipped with the app, so the
+non-commercial and share-alike obligations below stay with the publisher and the
+user, not with the app.
+
+1. ARASAAC pictograms
+---------------------
+
+Licence: CC BY-NC-SA 4.0
+Licence deed: https://creativecommons.org/licenses/by-nc-sa/4.0/
+
+Required attribution, in full:
+
+    Pictograms: Author: Sergio Palao. Origin: ARASAAC (https://arasaac.org). License: CC BY-NC-SA 4.0. Government of Aragon (Spain).
+
+Origin: ARASAAC, Government of Aragon (Spain).
+
+The ARASAAC pictograms are not bundled in the app binary. They are downloaded
+only when the user asks for a symbol pack, directly from the publisher. The
+CC BY-NC-SA 4.0 licence permits no commercial use, and any derivative symbol
+work must be distributed under the same licence (share-alike). SwarSathi ships
+no third-party artwork of its own; it ships only a pointer to the download.
+
+2. sherpa-onnx runtime
+----------------------
+
+Licence: Apache-2.0
+Copyright: the sherpa-onnx authors (k2-fsa).
+
+    sherpa-onnx - Apache License 2.0 - (c) 2023-2024 the sherpa-onnx authors
+    (k2-fsa).
+
+The runtime is not downloaded at runtime; it is linked into the app. Only this
+permissively licensed code is compiled into the binary. The voice models it
+executes are separate and are covered below.
+
+3. Piper voices
+---------------
+
+The offline neural voices are converted Piper voices published in the
+k2-fsa/sherpa-onnx releases. Every voice is downloaded individually by the user
+and none is bundled in the app. The licences are not uniform, so each is stated
+exactly as its publisher gives it:
+
+* Hindi - Pratham (male), hi_IN, medium
+  Licence: CC BY-NC-SA 4.0 (non-commercial)
+  Licence URL: http://creativecommons.org/licenses/by-nc-sa/4.0/
+  Attribution: Piper voice "pratham" (hi_IN, medium) trained on AI4Bharat
+  indicnlp_corpus by PravalX; converted for sherpa-onnx by k2-fsa.
+
+* Hindi - Priyamvada (female), hi_IN, medium
+  Licence: CC BY-NC-SA 4.0 (non-commercial)
+  Licence URL: http://creativecommons.org/licenses/by-nc-sa/4.0/
+  Attribution: Piper voice "priyamvada" (hi_IN, medium) trained on AI4Bharat
+  indicnlp_corpus by PravalX; converted for sherpa-onnx by k2-fsa.
+
+* Hindi - Rohan (male), hi_IN, medium
+  Licence: IITM IndicTTS licence (see URL)
+  Licence URL: https://www.iitm.ac.in/donlab/indictts/downloads/license.pdf
+  Attribution: Piper voice "rohan" (hi_IN, medium) trained on the IITM IndicTTS
+  Hindi Mono Male corpus; converted for sherpa-onnx by k2-fsa.
+
+* Malayalam - Arjun (male), ml_IN, medium
+  Licence: See upstream (Malayalam speech corpus on Kaggle)
+  Licence URL: https://www.kaggle.com/code/mpwolke/indic-tts-malayalam-speech-corpus
+  Attribution: Piper voice "arjun" (ml_IN, medium) trained on the Indic TTS
+  Malayalam speech corpus; converted for sherpa-onnx by k2-fsa.
+
+* Malayalam - Meera (female), ml_IN, medium
+  Licence: See upstream (Malayalam speech corpus on Kaggle)
+  Licence URL: https://www.kaggle.com/code/mpwolke/indic-tts-malayalam-speech-corpus
+  Attribution: Piper voice "meera" (ml_IN, medium) trained on the Indic TTS
+  Malayalam speech corpus; converted for sherpa-onnx by k2-fsa.
+
+The Hindi voices are trained on AI4Bharat data released under CC BY-NC-SA 4.0;
+the Malayalam voices defer to their upstream corpus; and one Hindi voice is
+under the IITM IndicTTS licence. None of these voices is redistributed with the
+app, and none may be used commercially where its licence says so.
+
+4. espeak-ng data
+-----------------
+
+Licence: GPL-3.0-or-later
+Copyright: the espeak-ng contributors.
+
+    espeak-ng data - GNU GPL v3 or later - (c) the espeak-ng contributors
+    (https://github.com/espeak-ng/espeak-ng).
+
+This is the phonemiser data shared by every Piper voice. It is downloaded by the
+user along with a voice and is not bundled in the app.

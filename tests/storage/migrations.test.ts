@@ -30,7 +30,10 @@ describe('migration list', () => {
     MIGRATIONS.forEach((migration, index) => {
       expect(migration.version).toBe(index + 1);
       expect(migration.description.length).toBeGreaterThan(0);
-      expect(migration.statements.length).toBeGreaterThan(0);
+      // A revision has to do something: either run SQL or add a column that was missing before.
+      expect(migration.statements.length + (migration.ensureColumns?.length ?? 0)).toBeGreaterThan(
+        0
+      );
     });
     expect(MIGRATIONS[MIGRATIONS.length - 1].version).toBe(LATEST_SCHEMA_VERSION);
   });
@@ -97,6 +100,21 @@ describe('runMigrations', () => {
     expect(newStatements).not.toContain('CREATE TABLE IF NOT EXISTS phrases');
 
     expect(database.storedSchemaVersion).toBe(LATEST_SCHEMA_VERSION);
+  });
+
+  it('adds the profile description and last-used columns without replaying earlier revisions', async () => {
+    const database = new FakeDatabase();
+    // A device that already holds a caregiver's profiles, sitting at schema version 5.
+    database.setSchemaVersion(5);
+    const before = database.executed.length;
+
+    await expect(runMigrations(database)).resolves.toBe(LATEST_SCHEMA_VERSION);
+
+    const upgrade = database.executed.slice(before).join('\n');
+    expect(upgrade).toContain('ALTER TABLE communication_profiles ADD COLUMN description');
+    expect(upgrade).toContain('ALTER TABLE communication_profiles ADD COLUMN lastUsedAt');
+    // The upgrade only widens the table; it must not replay the Part 5 schema over what is there.
+    expect(upgrade).not.toContain('CREATE TABLE IF NOT EXISTS communication_profiles');
   });
 
   it('upgrades a Part 1 database that already contains its tables', async () => {

@@ -1,11 +1,14 @@
 import React from 'react';
 import { AccessibilityInfo } from 'react-native';
-import { fireEvent, render, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { LanguageSelector } from '../../src/components/LanguageSelector';
 import { MessageEditor } from '../../src/components/MessageEditor';
 import { SpeakButton } from '../../src/components/SpeakButton';
 import { SpeechStatusBanner } from '../../src/components/SpeechStatusBanner';
+import { SpokenToast } from '../../src/components/SpokenToast';
 import { StopButton } from '../../src/components/StopButton';
+import { SuggestionChip } from '../../src/components/SuggestionChip';
+import { Toast } from '../../src/components/Toast';
 import { LANGUAGES } from '../../src/data/languages';
 import type { LanguageCapability } from '../../src/types';
 
@@ -116,6 +119,102 @@ describe('SpeechStatusBanner accessibility', () => {
     await view.rerender(<SpeechStatusBanner status="speaking" error={null} />);
 
     expect(announce).toHaveBeenCalledWith(expect.stringContaining('Speaking'));
+  });
+});
+
+describe('Toast accessibility', () => {
+  it('renders nothing while there is no message', async () => {
+    await render(<Toast message={null} testID="toast" />);
+
+    expect(screen.queryByTestId('toast')).toBeNull();
+  });
+
+  it('shows the message and announces it, but stays out of the accessibility tree', async () => {
+    const announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibility').mockClear();
+
+    await render(<Toast message="Saved to favourites" testID="toast" />);
+
+    expect(screen.getByText('Saved to favourites', { includeHiddenElements: true })).toBeTruthy();
+    expect(
+      screen.getByTestId('toast', { includeHiddenElements: true }).props.accessibilityElementsHidden
+    ).toBe(true);
+    expect(announce).toHaveBeenCalledWith('Saved to favourites');
+  });
+
+  it('announces a custom sentence when the visible wording would read oddly', async () => {
+    const announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibility').mockClear();
+
+    await render(<Toast message="Spoken" announcement="Message spoken." testID="toast" />);
+
+    expect(announce).toHaveBeenCalledWith('Message spoken.');
+  });
+
+  it('clears itself after a moment so the same message can be shown again', async () => {
+    jest.useFakeTimers();
+    const onHidden = jest.fn();
+
+    await render(<Toast message="Saved to favourites" duration={1000} onHidden={onHidden} testID="toast" />);
+    expect(screen.getByTestId('toast', { includeHiddenElements: true })).toBeTruthy();
+
+    await act(async () => {
+      jest.advanceTimersByTime(2000);
+    });
+
+    expect(onHidden).toHaveBeenCalledTimes(1);
+    jest.useRealTimers();
+  });
+});
+
+describe('SpokenToast accessibility', () => {
+  it('stays out of sight until a message has actually finished', async () => {
+    await render(<SpokenToast status="ready" />);
+
+    expect(screen.queryByText('Spoken', { includeHiddenElements: true })).toBeNull();
+  });
+
+  it('appears and announces once an utterance completes', async () => {
+    const announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
+    const view = await render(<SpokenToast status="speaking" />);
+
+    expect(screen.queryByText('Spoken', { includeHiddenElements: true })).toBeNull();
+
+    await view.rerender(<SpokenToast status="ready" />);
+
+    expect(screen.getByText('✓ Spoken', { includeHiddenElements: true })).toBeTruthy();
+    expect(announce).toHaveBeenCalledWith('Message spoken.');
+  });
+
+  it('does not celebrate a transition that is not a finished utterance', async () => {
+    const view = await render(<SpokenToast status="speaking" />);
+
+    await view.rerender(<SpokenToast status="stopped" />);
+
+    expect(screen.queryByText('Spoken', { includeHiddenElements: true })).toBeNull();
+  });
+});
+
+describe('SuggestionChip accessibility', () => {
+  it('reads out the idea and says that it only fills the editor', async () => {
+    await render(<SuggestionChip text="Please give me some water." meta="Health" onPress={jest.fn()} />);
+
+    const chip = screen.getByRole('button');
+    expect(chip.props.accessibilityLabel).toBe('Please give me some water. Health.');
+    expect(chip.props.accessibilityHint).toMatch(/editor/i);
+  });
+
+  it('uses the plain wording as its label when there is no context', async () => {
+    await render(<SuggestionChip text="Hello." onPress={jest.fn()} />);
+
+    expect(screen.getByRole('button').props.accessibilityLabel).toBe('Hello.');
+  });
+
+  it('reports the press so the host can fill the editor', async () => {
+    const onPress = jest.fn();
+    await render(<SuggestionChip text="Thank you." meta="General" onPress={onPress} testID="suggestion-thanks" />);
+
+    await fireEvent.press(screen.getByTestId('suggestion-thanks'));
+
+    expect(onPress).toHaveBeenCalledTimes(1);
   });
 });
 

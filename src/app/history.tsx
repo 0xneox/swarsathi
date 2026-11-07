@@ -1,10 +1,11 @@
 import { Stack } from 'expo-router';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { ActionButton } from '../components/ActionButton';
 import { ReplayChip } from '../components/ReplayChip';
 import { useTheme } from '../providers/ThemeProvider';
 import { useAppStore } from '../store/appStore';
+import { relativeTimeLabel } from '../utils/time';
 
 /**
  * Everything the user has said lately, ready to be said again with one press.
@@ -22,11 +23,49 @@ export default function HistoryScreen() {
   const removeHistoryEntry = useAppStore((state) => state.removeHistoryEntry);
   const clearHistory = useAppStore((state) => state.clearHistory);
 
+  // Capture current time once for consistent date labels across re-renders
+  const [now] = useState(() => Date.now());
+
   const handleReplay = useCallback((text: string, language: string) => {
     void useAppStore.getState().speakMessage(text, language, 'history');
   }, []);
 
   const isEmpty = communicationHistory.length === 0 && frequentMessages.length === 0;
+
+  // Group recent messages by date for easier scanning
+  const groupedHistory = useMemo(() => {
+    const groups: Record<string, typeof communicationHistory> = {};
+    communicationHistory.forEach((entry) => {
+      const date = new Date(entry.spokenAt);
+      const today = new Date(now);
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+
+      let label: string;
+      if (date.toDateString() === today.toDateString()) {
+        label = 'Today';
+      } else if (date.toDateString() === yesterday.toDateString()) {
+        label = 'Yesterday';
+      } else {
+        label = date.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+      }
+
+      if (!groups[label]) {
+        groups[label] = [];
+      }
+      groups[label].push(entry);
+    });
+
+    // Return groups in chronological order (oldest first for labels, newest entries within)
+    const sortedLabels = Object.keys(groups).sort((a, b) => {
+      // Sort by date in reverse (most recent first)
+      const dateA = new Date(groups[a][0].spokenAt);
+      const dateB = new Date(groups[b][0].spokenAt);
+      return dateB.getTime() - dateA.getTime();
+    });
+
+    return sortedLabels.map((label) => ({ label, entries: groups[label] }));
+  }, [communicationHistory, now]);
 
   return (
     <View style={[styles.flex, { backgroundColor: theme.colors.background }]}>
@@ -58,24 +97,25 @@ export default function HistoryScreen() {
           </Text>
         ) : null}
 
-        {communicationHistory.length > 0 ? (
-          <View style={{ gap: theme.spacing.sm }}>
+        {groupedHistory.map(({ label, entries }) => (
+          <View key={label} style={{ gap: theme.spacing.sm }}>
             <Text
               accessibilityRole="header"
               style={{
                 color: theme.colors.text,
-                fontSize: theme.fontSizes.title * theme.fontScale,
+                fontSize: theme.fontSizes.label * theme.fontScale,
                 fontWeight: '800',
               }}
             >
-              Recent
+              {label}
             </Text>
-            {communicationHistory.map((entry) => (
+            {entries.map((entry) => (
               <ReplayChip
                 key={entry.id}
                 testID={`history-${entry.id}`}
                 removeTestID={`history-remove-${entry.id}`}
                 text={entry.text}
+                meta={relativeTimeLabel(entry.spokenAt, now)}
                 removeLabel="Remove"
                 onPress={() => handleReplay(entry.text, entry.language)}
                 onRemove={() => {
@@ -84,7 +124,7 @@ export default function HistoryScreen() {
               />
             ))}
           </View>
-        ) : null}
+        ))}
 
         {frequentMessages.length > 0 ? (
           <View style={{ gap: theme.spacing.sm, marginTop: theme.spacing.md }}>

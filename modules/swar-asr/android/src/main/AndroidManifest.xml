@@ -1,0 +1,17 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!--
+    Dictation reads the microphone. RECORD_AUDIO is a runtime permission: the JavaScript layer asks
+    for it before listening, and the mic button stays hidden unless it is granted.
+  -->
+  <uses-permission android:name="android.permission.RECORD_AUDIO" />
+  <!--
+    Android 11+ package visibility: the recognition service lives in a different app (usually the
+    Google app), so it must be declared here or `isRecognitionAvailable()` always returns false and
+    dictation would appear broken on a phone that can actually do it.
+  -->
+  <queries>
+    <intent>
+      <action android:name="android.speech.RecognitionService" />
+    </intent>
+  </queries>
+</manifest>

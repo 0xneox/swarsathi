@@ -1,9 +1,10 @@
 import { Stack, router } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { ActionButton } from '../components/ActionButton';
 import { LanguageSelector } from '../components/LanguageSelector';
 import { StopButton } from '../components/StopButton';
+import { Toast } from '../components/Toast';
 import {
   HISTORY_LIMIT_MAX,
   HISTORY_LIMIT_MIN,
@@ -15,9 +16,17 @@ import { getSpeechController, useAppStore } from '../store/appStore';
 import type { SpeechOptions, VoiceInfo } from '../types';
 import { describeLanguageAvailability } from '../utils/labels';
 
+/**
+ * Bigger than the 48dp minimum on purpose: the two stepper buttons are how most values are changed,
+ * and a larger target is far easier to hit for someone with limited motor control.
+ */
+const STEPPER_CONTROL_SIZE = 64;
+
+/** Which sample the "Play sample" and "Test this voice" buttons are giving feedback about. */
+type SampleSource = 'rate' | 'voice';
+
 interface StepperProps {
   label: string;
-  value: number;
   display: string;
   onDecrease: () => void;
   onIncrease: () => void;
@@ -31,11 +40,12 @@ interface StepperProps {
  * An accessible number control built from two large buttons.
  *
  * Discrete steps are used instead of a slider on purpose: they are far easier to operate reliably
- * with limited motor control, and TalkBack can read the exact value after every press.
+ * with limited motor control, and TalkBack can read the new value after every press. The two
+ * buttons are left as separate accessibility elements rather than being merged into one grouped
+ * control, so a screen reader can actually reach them; the value announces itself when it changes.
  */
 function Stepper({
   label,
-  value,
   display,
   onDecrease,
   onIncrease,
@@ -46,8 +56,8 @@ function Stepper({
 }: StepperProps) {
   const theme = useTheme();
   const controlStyle = (disabled: boolean) => ({
-    minHeight: theme.minTouchTarget,
-    minWidth: theme.minTouchTarget,
+    minHeight: STEPPER_CONTROL_SIZE,
+    minWidth: STEPPER_CONTROL_SIZE,
     paddingHorizontal: theme.spacing.md,
     alignItems: 'center' as const,
     justifyContent: 'center' as const,
@@ -58,13 +68,7 @@ function Stepper({
   });
 
   return (
-    <View
-      accessible
-      accessibilityRole="adjustable"
-      accessibilityLabel={label}
-      accessibilityValue={{ text: display }}
-      style={styles.stepperRow}
-    >
+    <View style={styles.stepperRow}>
       <Text
         style={{ color: theme.colors.text, fontSize: theme.fontSizes.body * theme.fontScale, flex: 1 }}
       >
@@ -81,7 +85,7 @@ function Stepper({
         <Text
           style={{
             color: canDecrease ? theme.colors.text : theme.colors.textMuted,
-            fontSize: theme.fontSizes.label * theme.fontScale,
+            fontSize: theme.fontSizes.title * theme.fontScale,
             fontWeight: '800',
           }}
         >
@@ -89,6 +93,7 @@ function Stepper({
         </Text>
       </Pressable>
       <Text
+        accessibilityLiveRegion="polite"
         style={{
           color: theme.colors.text,
           fontSize: theme.fontSizes.body * theme.fontScale,
@@ -110,7 +115,7 @@ function Stepper({
         <Text
           style={{
             color: canIncrease ? theme.colors.text : theme.colors.textMuted,
-            fontSize: theme.fontSizes.label * theme.fontScale,
+            fontSize: theme.fontSizes.title * theme.fontScale,
             fontWeight: '800',
           }}
         >
@@ -121,8 +126,84 @@ function Stepper({
   );
 }
 
+interface SettingsSectionProps {
+  title: string;
+  /** Stable key for the collapse state and the test id, independent of the visible wording. */
+  id: string;
+  expanded: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}
+
+/**
+ * One collapsible group of settings.
+ *
+ * The header is a single button that reports its expanded state, so a screen reader can both read
+ * the group's name and fold it away. Sections start expanded, which keeps every setting visible on
+ * first open; collapsing is something the user opts into once they know their way around.
+ */
+function SettingsSection({ title, id, expanded, onToggle, children }: SettingsSectionProps) {
+  const theme = useTheme();
+  return (
+    <View style={{ marginTop: theme.spacing.xl }}>
+      <Pressable
+        testID={`settings-section-${id}`}
+        onPress={onToggle}
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        accessibilityLabel={title}
+        accessibilityHint={expanded ? 'Collapses this section.' : 'Expands this section.'}
+        style={({ pressed }) => [
+          styles.sectionHeader,
+          {
+            minHeight: theme.minTouchTarget,
+            paddingHorizontal: theme.spacing.md,
+            paddingVertical: theme.spacing.sm,
+            backgroundColor: pressed ? theme.colors.surfaceMuted : theme.colors.surface,
+            borderColor: theme.colors.border,
+            borderWidth: theme.mode === 'high-contrast' ? 2 : 1,
+            borderRadius: theme.radius.md,
+          },
+        ]}
+      >
+        <Text
+          allowFontScaling
+          style={{
+            color: theme.colors.text,
+            fontSize: theme.fontSizes.title * theme.fontScale,
+            fontWeight: '800',
+            flex: 1,
+          }}
+        >
+          {title}
+        </Text>
+        <Text
+          style={{
+            color: theme.colors.text,
+            fontSize: theme.fontSizes.body * theme.fontScale,
+            fontWeight: '800',
+          }}
+        >
+          {expanded ? '\u25BE' : '\u25B8'}
+        </Text>
+      </Pressable>
+      {expanded ? (
+        <View style={{ marginTop: theme.spacing.md, gap: theme.spacing.md }}>{children}</View>
+      ) : null}
+    </View>
+  );
+}
+
 function formatMultiplier(value: number): string {
   return `${value.toFixed(2)}x`;
+}
+
+/** The line of feedback shown under a sample button, naming the settings the sample was played at. */
+function sampleFeedbackText(source: SampleSource, rate: number, pitch: number): string {
+  if (source === 'voice') {
+    return 'Playing a sample with the selected voice.';
+  }
+  return `Playing a sample at ${formatMultiplier(rate)} speed and ${formatMultiplier(pitch)} pitch.`;
 }
 
 function describeVoice(voice: VoiceInfo): string {
@@ -146,13 +227,21 @@ export default function SettingsScreen() {
   const setHighContrast = useAppStore((state) => state.setHighContrast);
   const setSimplifiedMode = useAppStore((state) => state.setSimplifiedMode);
   const setHistoryLimit = useAppStore((state) => state.setHistoryLimit);
+  const resetPreferences = useAppStore((state) => state.resetPreferences);
   const repeatLast = useAppStore((state) => state.repeatLast);
   const stop = useAppStore((state) => state.stop);
   const speech = useAppStore((state) => state.speech);
   const storageAvailable = useAppStore((state) => state.storageAvailable);
   const historyLength = useAppStore((state) => state.communicationHistory.length);
 
-  const [testFeedback, setTestFeedback] = useState<string | null>(null);
+  const [sample, setSample] = useState<{ source: SampleSource; text: string } | null>(null);
+  const [resetToast, setResetToast] = useState<string | null>(null);
+  // A section is open until the user closes it: absence from this map means "expanded".
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+
+  const toggleSection = useCallback((id: string) => {
+    setCollapsed((previous) => ({ ...previous, [id]: !previous[id] }));
+  }, []);
 
   const { features } = speech;
 
@@ -168,32 +257,44 @@ export default function SettingsScreen() {
     (capability) => capability.language.code === preferences.language
   );
 
-  const handleTestVoice = useCallback(async () => {
-    // A short phrase in the target script proves the engine really speaks this language.
-    const sample = selectedLanguage?.nativeName ?? 'SwarSathi';
-    const options: SpeechOptions = {
-      language: preferences.language,
-      rate: preferences.speechRate,
-      pitch: preferences.pitch,
-    };
-    if (preferences.voiceId) {
-      options.voiceId = preferences.voiceId;
-    }
-    setTestFeedback('Playing a test phrase...');
-    await getSpeechController().speak(sample, options);
-  }, [preferences, selectedLanguage]);
+  const playSample = useCallback(
+    async (source: SampleSource) => {
+      // A short phrase in the target script proves the engine really speaks this language, and it is
+      // spoken with the settings as they are now so the effect of a rate or pitch change is audible.
+      const text = selectedLanguage?.nativeName ?? 'SwarSathi';
+      const options: SpeechOptions = {
+        language: preferences.language,
+        rate: preferences.speechRate,
+        pitch: preferences.pitch,
+      };
+      if (preferences.voiceId) {
+        options.voiceId = preferences.voiceId;
+      }
+      setSample({
+        source,
+        text: sampleFeedbackText(source, preferences.speechRate, preferences.pitch),
+      });
+      await getSpeechController().speak(text, options);
+    },
+    [preferences, selectedLanguage]
+  );
 
-  const sectionStyle = {
-    backgroundColor: theme.colors.background,
-    marginTop: theme.spacing.xl,
-  };
-
-  const headingStyle = {
-    color: theme.colors.text,
-    fontSize: theme.fontSizes.title * theme.fontScale,
-    fontWeight: '800' as const,
-    marginBottom: theme.spacing.sm,
-  };
+  const handleResetSettings = useCallback(() => {
+    Alert.alert(
+      'Reset all settings?',
+      'Speech rate, pitch, language, voice, text size, contrast, Simplified Mode and the history limit go back to their defaults. Your favourites, saved messages, boards, profiles and history are not affected.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reset',
+          style: 'destructive',
+          onPress: () => {
+            void resetPreferences().then(() => setResetToast('Settings reset to defaults.'));
+          },
+        },
+      ]
+    );
+  }, [resetPreferences]);
 
   const bodyStyle = {
     color: theme.colors.text,
@@ -205,17 +306,21 @@ export default function SettingsScreen() {
     fontSize: theme.fontSizes.caption * theme.fontScale,
   };
 
+  const isExpanded = (id: string) => collapsed[id] !== true;
+
   return (
-    <>
+    <View style={styles.flex}>
       <Stack.Screen options={{ title: 'Settings' }} />
       <ScrollView
         style={[styles.flex, { backgroundColor: theme.colors.background }]}
         contentContainerStyle={styles.content}
       >
-        <View style={sectionStyle}>
-          <Text accessibilityRole="header" style={headingStyle}>
-            Engine
-          </Text>
+        <SettingsSection
+          title="Engine"
+          id="engine"
+          expanded={isExpanded('engine')}
+          onToggle={() => toggleSection('engine')}
+        >
           <VoiceOption
             label="Android Text-to-Speech"
             description="Built-in Android system speech engine."
@@ -244,17 +349,18 @@ export default function SettingsScreen() {
               borderColor: theme.colors.border,
               borderWidth: theme.mode === 'high-contrast' ? 2 : 1,
               borderRadius: theme.radius.md,
-              marginTop: theme.spacing.sm,
             }}
           >
             <Text style={[bodyStyle, { fontWeight: '700' }]}>Manage offline voices {'\u2192'}</Text>
           </Pressable>
-        </View>
+        </SettingsSection>
 
-        <View style={sectionStyle}>
-          <Text accessibilityRole="header" style={headingStyle}>
-            Speaking
-          </Text>
+        <SettingsSection
+          title="Speaking"
+          id="speaking"
+          expanded={isExpanded('speaking')}
+          onToggle={() => toggleSection('speaking')}
+        >
           <LanguageSelector
             languages={LANGUAGES}
             capabilities={speech.capabilities}
@@ -263,7 +369,7 @@ export default function SettingsScreen() {
               void setLanguage(code);
             }}
           />
-          <Text style={[mutedStyle, styles.hint]}>
+          <Text style={mutedStyle}>
             {selectedCapability
               ? `${formatLanguageLabel(selectedLanguage ?? LANGUAGES[0])}: ${describeLanguageAvailability(
                   selectedCapability.availability
@@ -271,11 +377,8 @@ export default function SettingsScreen() {
               : 'Availability on this phone has not been checked yet.'}
           </Text>
 
-          <View style={styles.spacer} />
-
           <Stepper
             label="Speech rate"
-            value={preferences.speechRate}
             display={formatMultiplier(preferences.speechRate)}
             canDecrease={preferences.speechRate > 0.5}
             canIncrease={preferences.speechRate < 2.0}
@@ -285,12 +388,9 @@ export default function SettingsScreen() {
             onIncrease={() => void setSpeechRate(roundToStep(preferences.speechRate + 0.05))}
           />
 
-          <View style={styles.smallSpacer} />
-
           {features.supportsPitch ? (
             <Stepper
               label="Pitch"
-              value={preferences.pitch}
               display={formatMultiplier(preferences.pitch)}
               canDecrease={preferences.pitch > 0.5}
               canIncrease={preferences.pitch < 2.0}
@@ -306,31 +406,17 @@ export default function SettingsScreen() {
             </Text>
           )}
 
-          <View style={styles.spacer} />
-
-          <Pressable
-            testID="test-voice"
-            onPress={() => {
-              void handleTestVoice();
-            }}
+          <ActionButton
+            testID="play-sample"
+            label="Play sample"
+            hint="Speaks a short sample so you can hear the current speed and pitch."
+            variant="secondary"
             disabled={speech.status === 'initializing'}
-            accessibilityRole="button"
-            accessibilityLabel="Test this voice"
-            accessibilityHint="Speaks a short sample using the current language and voice."
-            style={{
-              minHeight: theme.minTouchTarget,
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderColor: theme.colors.border,
-              borderWidth: theme.mode === 'high-contrast' ? 2 : 1,
-              borderRadius: theme.radius.md,
-            }}
-          >
-            <Text style={[bodyStyle, { fontWeight: '700' }]}>Test this voice</Text>
-          </Pressable>
-          {testFeedback ? <Text style={[mutedStyle, styles.hint]}>{testFeedback}</Text> : null}
-
-          <View style={styles.spacer} />
+            onPress={() => void playSample('rate')}
+          />
+          {sample?.source === 'rate' ? (
+            <Text style={mutedStyle}>{sample.text}</Text>
+          ) : null}
 
           <ActionButton
             testID="repeat-last"
@@ -340,14 +426,15 @@ export default function SettingsScreen() {
             disabled={historyLength === 0}
             onPress={() => void repeatLast()}
           />
-          <View style={styles.smallSpacer} />
           <StopButton onPress={() => void stop()} active={speech.speaking} />
-        </View>
+        </SettingsSection>
 
-        <View style={sectionStyle}>
-          <Text accessibilityRole="header" style={headingStyle}>
-            Communication
-          </Text>
+        <SettingsSection
+          title="Communication"
+          id="communication"
+          expanded={isExpanded('communication')}
+          onToggle={() => toggleSection('communication')}
+        >
           <View style={styles.switchRow}>
             <Text style={[bodyStyle, styles.switchLabel]}>Simplified Mode</Text>
             <Switch
@@ -360,16 +447,13 @@ export default function SettingsScreen() {
               thumbColor={theme.colors.background}
             />
           </View>
-          <Text style={[mutedStyle, styles.hint]}>
+          <Text style={mutedStyle}>
             Simplified Mode keeps only the communication cards and Emergency on the Home screen, with
             bigger buttons and fewer choices. An obvious button on Home returns to the full screen.
           </Text>
 
-          <View style={styles.spacer} />
-
           <Stepper
             label="Messages kept in history"
-            value={preferences.historyLimit}
             display={`${preferences.historyLimit}`}
             canDecrease={preferences.historyLimit > HISTORY_LIMIT_MIN}
             canIncrease={preferences.historyLimit < HISTORY_LIMIT_MAX}
@@ -378,19 +462,21 @@ export default function SettingsScreen() {
             onDecrease={() => void setHistoryLimit(preferences.historyLimit - HISTORY_LIMIT_STEP)}
             onIncrease={() => void setHistoryLimit(preferences.historyLimit + HISTORY_LIMIT_STEP)}
           />
-          <Text style={[mutedStyle, styles.hint]}>
+          <Text style={mutedStyle}>
             How many of your recently spoken messages SwarSathi keeps on this device. Lowering this
             removes older ones immediately. No recordings are ever stored.
           </Text>
-        </View>
+        </SettingsSection>
 
-        <View style={sectionStyle}>
-          <Text accessibilityRole="header" style={headingStyle}>
-            Voice
-          </Text>
+        <SettingsSection
+          title="Voice"
+          id="voice"
+          expanded={isExpanded('voice')}
+          onToggle={() => toggleSection('voice')}
+        >
           {features.supportsVoiceSelection ? (
             <>
-              <Text style={[mutedStyle, styles.hint]}>
+              <Text style={mutedStyle}>
                 {voices.length > 0
                   ? 'Choose a voice, or let SwarSathi pick the best one automatically.'
                   : 'This phone has not reported any voices for the selected language.'}
@@ -418,15 +504,28 @@ export default function SettingsScreen() {
               let SwarSathi pick one.
             </Text>
           )}
-        </View>
 
-        <View style={sectionStyle}>
-          <Text accessibilityRole="header" style={headingStyle}>
-            Display and comfort
-          </Text>
+          <ActionButton
+            testID="test-voice"
+            label="Test this voice"
+            hint="Speaks a short sample using the selected language and voice."
+            variant="secondary"
+            disabled={speech.status === 'initializing'}
+            onPress={() => void playSample('voice')}
+          />
+          {sample?.source === 'voice' ? (
+            <Text style={mutedStyle}>{sample.text}</Text>
+          ) : null}
+        </SettingsSection>
+
+        <SettingsSection
+          title="Display and comfort"
+          id="display"
+          expanded={isExpanded('display')}
+          onToggle={() => toggleSection('display')}
+        >
           <Stepper
             label="Text size"
-            value={preferences.fontScale}
             display={formatMultiplier(preferences.fontScale)}
             canDecrease={preferences.fontScale > 0.8}
             canIncrease={preferences.fontScale < 2.0}
@@ -435,7 +534,6 @@ export default function SettingsScreen() {
             onDecrease={() => void setFontScale(roundToStep(preferences.fontScale - 0.1))}
             onIncrease={() => void setFontScale(roundToStep(preferences.fontScale + 0.1))}
           />
-          <View style={styles.spacer} />
           <View style={styles.switchRow}>
             <Text style={[bodyStyle, styles.switchLabel]}>High contrast</Text>
             <Switch
@@ -448,17 +546,54 @@ export default function SettingsScreen() {
               thumbColor={theme.colors.background}
             />
           </View>
-        </View>
+        </SettingsSection>
 
-        <View style={sectionStyle}>
-          <Text accessibilityRole="header" style={headingStyle}>
-            This phone
+        <SettingsSection
+          title="Personalisation"
+          id="personalisation"
+          expanded={isExpanded('personalisation')}
+          onToggle={() => toggleSection('personalisation')}
+        >
+          <Text style={mutedStyle}>
+            Profiles keep separate settings for different people or situations. Communication boards
+            group cards for a place or need. Everything here stays on this device.
           </Text>
+          <SettingsLink
+            testID="open-profiles"
+            label="Profiles"
+            description="Switch between people or situations, and give each one its own settings."
+            onPress={() => router.push('/profiles')}
+          />
+          <SettingsLink
+            testID="open-boards"
+            label="Communication boards"
+            description="Situations like Medical, Food and Drink or Travel, each with its own cards."
+            onPress={() => router.push('/boards')}
+          />
+          <SettingsLink
+            testID="open-caregiver"
+            label="Caregiver access"
+            description="Optionally require a local PIN before profiles or boards can be changed."
+            onPress={() => router.push('/caregiver')}
+          />
+          <SettingsLink
+            testID="open-backup"
+            label="Backup and restore"
+            description="Save profiles, boards and messages to a file, or restore them later."
+            onPress={() => router.push('/backup')}
+          />
+        </SettingsSection>
+
+        <SettingsSection
+          title="This phone"
+          id="phone"
+          expanded={isExpanded('phone')}
+          onToggle={() => toggleSection('phone')}
+        >
           <Text style={bodyStyle}>Engine: {speech.engineDisplayName ?? 'Unknown'}</Text>
           <Text style={bodyStyle}>
             Storage: {storageAvailable ? 'Saved on this device' : 'Unavailable, nothing is being saved'}
           </Text>
-          <View style={styles.spacer} />
           {speech.capabilities.map((capability) => (
             <Text key={capability.language.code} style={mutedStyle}>
               {`${formatLanguageLabel(capability.language)}: ${describeLanguageAvailability(
@@ -469,20 +604,54 @@ export default function SettingsScreen() {
           {speech.capabilities.length === 0 ? (
             <Text style={mutedStyle}>No speech capabilities have been detected yet.</Text>
           ) : null}
-        </View>
+        </SettingsSection>
 
-        <View style={sectionStyle}>
-          <Text accessibilityRole="header" style={headingStyle}>
-            Privacy
-          </Text>
+        <SettingsSection
+          title="Privacy"
+          id="privacy"
+          expanded={isExpanded('privacy')}
+          onToggle={() => toggleSection('privacy')}
+        >
           <Text style={bodyStyle}>
             SwarSathi has no account, no login and no advertising. Your messages are stored only on
             this device and are never uploaded. Speech works without internet whenever an offline
             voice is installed.
           </Text>
-        </View>
+          <SettingsLink
+            testID="settings-credits"
+            label="Credits and licences"
+            description="See what SwarSathi uses and why it bundles no third-party artwork or voices."
+            onPress={() => router.push('/credits')}
+          />
+        </SettingsSection>
+
+        <SettingsSection
+          title="Reset"
+          id="reset"
+          expanded={isExpanded('reset')}
+          onToggle={() => toggleSection('reset')}
+        >
+          <Text style={mutedStyle}>
+            Puts every setting on this screen back to how it was when SwarSathi was installed. Your
+            favourites, saved messages, communication boards, profiles and message history are kept.
+          </Text>
+          <ActionButton
+            testID="reset-settings"
+            label="Reset all settings to defaults"
+            hint="Asks you to confirm, then restores the default settings. Your saved content is kept."
+            variant="danger"
+            onPress={handleResetSettings}
+          />
+        </SettingsSection>
       </ScrollView>
-    </>
+
+      <Toast
+        testID="settings-toast"
+        message={resetToast}
+        announcement="Settings reset to defaults."
+        onHidden={() => setResetToast(null)}
+      />
+    </View>
   );
 }
 
@@ -509,7 +678,6 @@ function VoiceOption({ label, description, selected, disabled = false, onPress }
         borderWidth: selected ? 3 : theme.mode === 'high-contrast' ? 2 : 1,
         borderRadius: theme.radius.md,
         padding: theme.spacing.md,
-        marginBottom: theme.spacing.sm,
         minHeight: theme.minTouchTarget,
       })}
     >
@@ -529,6 +697,60 @@ function VoiceOption({ label, description, selected, disabled = false, onPress }
   );
 }
 
+/**
+ * A large, screen-reader-friendly row that leads to one of the Part 5 setup screens. It is kept as
+ * a single full-width target so it is equally usable by touch, switch access and a screen reader.
+ */
+interface SettingsLinkProps {
+  testID: string;
+  label: string;
+  description: string;
+  onPress: () => void;
+}
+
+function SettingsLink({ testID, label, description, onPress }: SettingsLinkProps) {
+  const theme = useTheme();
+  return (
+    <Pressable
+      testID={testID}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`${label}. ${description}`}
+      accessibilityHint="Opens this screen."
+      style={({ pressed }) => ({
+        minHeight: theme.minTouchTarget,
+        justifyContent: 'center',
+        paddingHorizontal: theme.spacing.md,
+        paddingVertical: theme.spacing.sm,
+        backgroundColor: pressed ? theme.colors.surfaceMuted : theme.colors.surface,
+        borderColor: theme.colors.border,
+        borderWidth: theme.mode === 'high-contrast' ? 2 : 1,
+        borderRadius: theme.radius.md,
+      })}
+    >
+      <Text
+        allowFontScaling
+        style={{
+          color: theme.colors.text,
+          fontSize: theme.fontSizes.body * theme.fontScale,
+          fontWeight: '700',
+        }}
+      >
+        {label}
+      </Text>
+      <Text
+        allowFontScaling
+        style={{
+          color: theme.colors.textMuted,
+          fontSize: theme.fontSizes.caption * theme.fontScale,
+        }}
+      >
+        {description}
+      </Text>
+    </Pressable>
+  );
+}
+
 /** Rounds to two decimals so repeated stepping cannot build up floating point noise. */
 function roundToStep(value: number): number {
   return Math.round(value * 100) / 100;
@@ -542,14 +764,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingBottom: 48,
   },
-  hint: {
-    marginTop: 6,
-  },
-  spacer: {
-    height: 16,
-  },
-  smallSpacer: {
-    height: 8,
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   stepperRow: {
     flexDirection: 'row',

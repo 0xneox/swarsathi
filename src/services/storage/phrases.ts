@@ -8,6 +8,7 @@ import type { CustomMessage, Favourite, Phrase } from '../../types';
 import { logger } from '../../utils/logger';
 import { normalizeForSpeech } from '../../utils/text';
 import { getDatabase } from './database';
+import { getActiveProfileId } from './profileScope';
 
 const SCOPE = 'Storage';
 
@@ -17,6 +18,9 @@ const SCOPE = 'Storage';
  * Each interface has a SQLite implementation used by the application and an in-memory
  * implementation used when the database cannot be opened (and by the unit tests). The two obey the
  * same contract, which is what lets the rest of the app stay unaware of which one it holds.
+ *
+ * Favourites belong to a profile from Part 5, so that store is scoped by the active profile. The
+ * phrase library is reference data and the user's own messages are shared, so neither is scoped.
  */
 
 // region Phrases
@@ -119,7 +123,7 @@ export class InMemoryPhraseRepository implements PhraseRepository {
 
 // region Favourites
 
-/** Persistence for the phrases and messages the user pinned for one-tap access. */
+/** Persistence for the phrases and messages the user pinned for one-tap access, for one profile. */
 export interface FavouriteRepository {
   list(): Promise<Favourite[]>;
   add(favourite: Favourite): Promise<void>;
@@ -155,8 +159,9 @@ export class SqliteFavouriteRepository implements FavouriteRepository {
   async list(): Promise<Favourite[]> {
     const database = await getDatabase();
     const rows = await database.getAllAsync<FavouriteRow>(
-      `SELECT ${FAVOURITE_COLUMNS} FROM favourites ORDER BY sortOrder ASC, createdAt ASC`,
-      []
+      `SELECT ${FAVOURITE_COLUMNS} FROM favourites
+        WHERE profileId = $profileId ORDER BY sortOrder ASC, createdAt ASC`,
+      { $profileId: getActiveProfileId() }
     );
     return rows.map(rowToFavourite);
   }
@@ -164,11 +169,14 @@ export class SqliteFavouriteRepository implements FavouriteRepository {
   async add(favourite: Favourite): Promise<void> {
     const database = await getDatabase();
     await database.runAsync(
-      `INSERT INTO favourites (id, phraseId, customMessageId, sortOrder, createdAt)
-       VALUES ($id, $phraseId, $customMessageId, $sortOrder, $createdAt)
-       ON CONFLICT(id) DO UPDATE SET sortOrder = excluded.sortOrder`,
+      `INSERT INTO favourites (id, profileId, phraseId, customMessageId, sortOrder, createdAt)
+       VALUES ($id, $profileId, $phraseId, $customMessageId, $sortOrder, $createdAt)
+       ON CONFLICT(id) DO UPDATE SET
+         profileId = excluded.profileId,
+         sortOrder = excluded.sortOrder`,
       {
         $id: favourite.id,
+        $profileId: getActiveProfileId(),
         $phraseId: favourite.phraseId,
         $customMessageId: favourite.customMessageId,
         $sortOrder: favourite.sortOrder,
@@ -194,14 +202,17 @@ export class SqliteFavouriteRepository implements FavouriteRepository {
 
   async clear(): Promise<void> {
     const database = await getDatabase();
-    await database.runAsync('DELETE FROM favourites', []);
+    await database.runAsync('DELETE FROM favourites WHERE profileId = $profileId', {
+      $profileId: getActiveProfileId(),
+    });
   }
 
   async findByPhrase(phraseId: string): Promise<Favourite | null> {
     const database = await getDatabase();
     const row = await database.getFirstAsync<FavouriteRow>(
-      `SELECT ${FAVOURITE_COLUMNS} FROM favourites WHERE phraseId = $phraseId LIMIT 1`,
-      { $phraseId: phraseId }
+      `SELECT ${FAVOURITE_COLUMNS} FROM favourites
+        WHERE profileId = $profileId AND phraseId = $phraseId LIMIT 1`,
+      { $profileId: getActiveProfileId(), $phraseId: phraseId }
     );
     return row ? rowToFavourite(row) : null;
   }
@@ -209,52 +220,65 @@ export class SqliteFavouriteRepository implements FavouriteRepository {
   async findByCustomMessage(customMessageId: string): Promise<Favourite | null> {
     const database = await getDatabase();
     const row = await database.getFirstAsync<FavouriteRow>(
-      `SELECT ${FAVOURITE_COLUMNS} FROM favourites WHERE customMessageId = $customMessageId LIMIT 1`,
-      { $customMessageId: customMessageId }
+      `SELECT ${FAVOURITE_COLUMNS} FROM favourites
+        WHERE profileId = $profileId AND customMessageId = $customMessageId LIMIT 1`,
+      { $profileId: getActiveProfileId(), $customMessageId: customMessageId }
     );
     return row ? rowToFavourite(row) : null;
   }
 }
 
 export class InMemoryFavouriteRepository implements FavouriteRepository {
-  private favourites = new Map<string, Favourite>();
+  private readonly byProfile = new Map<string, Map<string, Favourite>>();
+
+  /** The favourites of the active profile, created on first use so callers never see `undefined`. */
+  private current(): Map<string, Favourite> {
+    const profileId = getActiveProfileId();
+    let favourites = this.byProfile.get(profileId);
+    if (!favourites) {
+      favourites = new Map<string, Favourite>();
+      this.byProfile.set(profileId, favourites);
+    }
+    return favourites;
+  }
 
   async list(): Promise<Favourite[]> {
-    return [...this.favourites.values()]
+    return [...this.current().values()]
       .map((favourite) => ({ ...favourite }))
       .sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt - b.createdAt);
   }
 
   async add(favourite: Favourite): Promise<void> {
-    this.favourites.set(favourite.id, { ...favourite });
+    this.current().set(favourite.id, { ...favourite });
   }
 
   async remove(id: string): Promise<void> {
-    this.favourites.delete(id);
+    this.current().delete(id);
   }
 
   async reorder(orderedIds: string[]): Promise<void> {
+    const favourites = this.current();
     orderedIds.forEach((id, index) => {
-      const existing = this.favourites.get(id);
+      const existing = favourites.get(id);
       if (existing) {
-        this.favourites.set(id, { ...existing, sortOrder: index });
+        favourites.set(id, { ...existing, sortOrder: index });
       }
     });
   }
 
   async clear(): Promise<void> {
-    this.favourites.clear();
+    this.current().clear();
   }
 
   async findByPhrase(phraseId: string): Promise<Favourite | null> {
     return (
-      [...this.favourites.values()].find((favourite) => favourite.phraseId === phraseId) ?? null
+      [...this.current().values()].find((favourite) => favourite.phraseId === phraseId) ?? null
     );
   }
 
   async findByCustomMessage(customMessageId: string): Promise<Favourite | null> {
     return (
-      [...this.favourites.values()].find(
+      [...this.current().values()].find(
         (favourite) => favourite.customMessageId === customMessageId
       ) ?? null
     );

@@ -102,6 +102,78 @@ export interface SpeechErrorInfo {
   detail?: string;
 }
 
+// region Sprint B: dictation (speech recognition)
+
+/**
+ * Why a dictation attempt stopped.
+ *
+ * Deliberately separate from `SpeechErrorCode`: dictation and speech fail for different reasons, and
+ * folding them together would force every screen to translate codes that can never apply to it.
+ */
+export type RecognitionErrorCode =
+  | 'RECOGNITION_UNAVAILABLE'
+  | 'MICROPHONE_PERMISSION_DENIED'
+  | 'NO_MATCH'
+  | 'SPEECH_TIMEOUT'
+  | 'RECOGNIZER_BUSY'
+  | 'LANGUAGE_UNAVAILABLE'
+  | 'CANCELLED'
+  | 'UNKNOWN';
+
+/** Plain description of a dictation failure, safe to keep in the store. */
+export interface RecognitionErrorInfo {
+  code: RecognitionErrorCode;
+  message: string;
+  hint?: string;
+  detail?: string;
+}
+
+/** Callbacks one dictation session reports through. Every one of them is optional. */
+export interface SpeechRecognitionCallbacks {
+  /** Interim text, replaced wholesale as the person speaks. May fire many times. */
+  onPartial?: (text: string) => void;
+  /** The final text for the utterance. Emitted at most once; the session is over afterwards. */
+  onFinal?: (text: string) => void;
+  /** The session failed. Emitted at most once; the session is over afterwards. */
+  onError?: (error: RecognitionErrorInfo) => void;
+  /** The session is over. Emitted exactly once, after `onFinal` or `onError`. */
+  onEnd?: () => void;
+}
+
+/**
+ * The dictation abstraction.
+ *
+ * Mirrors `SpeechEngine`, but for listening rather than speaking. SwarSathi only ever implements
+ * this over on-device recognition: there is deliberately no network recogniser, so `isAvailable()`
+ * returning false is the only honest answer on a phone that cannot listen offline.
+ */
+export interface SpeechRecognition {
+  /** Stable identifier, e.g. `android-on-device-asr`. */
+  readonly id: string;
+  /** Name shown in Settings and diagnostics. */
+  readonly displayName: string;
+  /**
+   * True when this device can recognise speech without internet and without sending audio away.
+   * The dictation button is hidden unless this is true.
+   */
+  isAvailable(): Promise<boolean>;
+  /**
+   * Per-language on-device support. `null` means "this phone cannot tell" (Android 12 and older
+   * expose only a device-wide answer), which callers must not present as a yes.
+   */
+  isLanguageAvailable(languageTag: string): Promise<boolean | null>;
+  /** Begins one session. Resolves once listening has actually started. */
+  start(languageTag: string, callbacks: SpeechRecognitionCallbacks): Promise<void>;
+  /** Ends the session, keeping whatever was heard. Safe to call when idle. */
+  stop(): Promise<void>;
+  /** Abandons the session and discards any interim text. Safe to call when idle. */
+  cancel(): Promise<void>;
+  /** Releases native resources. Must not be used again afterwards. */
+  dispose(): Promise<void>;
+}
+
+// endregion
+
 /**
  * The engines SwarSathi ships with.
  *
@@ -325,7 +397,7 @@ export interface FavouriteEntry {
  *
  * Kept next to the history row so diagnostics (and the user) can tell a card tap from typed text.
  */
-export type CommunicationSource = 'quick' | 'emergency' | 'editor' | 'phrase' | 'history';
+export type CommunicationSource = 'quick' | 'emergency' | 'editor' | 'phrase' | 'history' | 'aac';
 
 /**
  * One stored configuration row for a Home communication card.
@@ -499,5 +571,490 @@ export type NeuralModelStatus =
   | 'busy'
   /** The device cannot run this model (wrong ABI, or the engine module is absent). */
   | 'unsupported';
+
+// endregion
+
+// region Part 5: personalisation
+
+/**
+ * A personal communication profile.
+ *
+ * A profile is everything about *how* one person communicates: the language, the engine, the
+ * speed, and the wording of the boards they use. SwarSathi ships one by default, the user may add
+ * as many as they need, and switching between them never restarts the application.
+ *
+ * The name is the only identity the user edits; every setting lives in `preferences` so a profile
+ * cannot drift into carrying a parallel copy of the settings.
+ */
+export interface Profile {
+  id: string;
+  /** Human readable name, e.g. `Amma` or `Default`. */
+  name: string;
+  /**
+   * A short note on what the profile is for, e.g. "Hospital visits and appointments".
+   *
+   * Empty when the caregiver has not written one. It is there to remind them what "Hospital" and
+   * "Home" were each set up for, so it is shown on the profile's tile.
+   */
+  description: string;
+  /** True for the profile SwarSathi created itself. It can be renamed but never deleted. */
+  isDefault: boolean;
+  /** Every preference this profile owns. */
+  preferences: UserPreferences;
+  /**
+   * When this profile was last switched to, or `null` if it never has been.
+   *
+   * Device bookkeeping rather than profile content: it is what lets the list say "Last used: 2 days
+   * ago" so a caregiver can see which profile is the one really in use.
+   */
+  lastUsedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * A context-based communication board.
+ *
+ * Boards group the cards that suit one situation - a hospital visit, a journey, a conversation at
+ * work. SwarSathi seeds a set of default boards; the user may edit those, add their own, or
+ * duplicate an existing board as a starting point.
+ */
+export interface CommunicationBoard {
+  id: string;
+  /** Title shown on the board's tile and screen. */
+  title: string;
+  /** BCP-47 tag the board's cards are written in. */
+  language: string;
+  /** True for a board SwarSathi seeded. Default boards can be edited, and deleted if unwanted. */
+  isDefault: boolean;
+  /** Position in the board list; smaller values are shown first. */
+  sortOrder: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * One card on a communication board.
+ *
+ * A card either borrows a bundled phrase (`phraseId` set, so it keeps working in every language the
+ * library covers) or carries its own text. Exactly one of the two is used; see
+ * `resolveBoardCard`.
+ */
+export interface BoardCard {
+  id: string;
+  boardId: string;
+  /** Logical id of a bundled phrase, or `null` when the card carries its own `text`. */
+  phraseId: string | null;
+  /** Short label shown on the card. Falls back to the resolved text when empty. */
+  label: string;
+  /** The wording to speak when `phraseId` is `null`. */
+  text: string;
+  /** BCP-47 tag of `text`. */
+  language: string;
+  /** Position within the board; smaller values are shown first. */
+  sortOrder: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** A board card resolved for the board's language and ready to render. */
+export interface BoardCardEntry {
+  id: string;
+  label: string;
+  /** The text that will be spoken (and shown on the card). */
+  text: string;
+  /** BCP-47 tag the text should be spoken in. */
+  language: string;
+  /** True when the card borrows a bundled phrase rather than its own wording. */
+  fromLibrary: boolean;
+}
+
+/** A board together with the cards it holds, ready for the board screen. */
+export interface CommunicationBoardWithCards {
+  board: CommunicationBoard;
+  cards: BoardCardEntry[];
+}
+
+/**
+ * Files and, optionally, a PIN.
+ *
+ * `pinHash` is a salted hash; the PIN itself is never stored, and `pinSalt` is a per-device random
+ * value. See `src/utils/pin.ts`.
+ */
+export interface CaregiverSettings {
+  /**
+   * Whether a caregiver may open SwarSathi's configuration screens.
+   *
+   * Off by default. The primary user always keeps control: a caregiver can help arrange boards and
+   * messages, but cannot take over speaking, and nothing is ever sent off the device.
+   */
+  enabled: boolean;
+  /** True when a PIN has been set. The hash itself is never shown to the UI. */
+  pinSet: boolean;
+}
+
+// endregion
+
+// region Part 6: unified messages
+
+/**
+ * Where one segment's wording came from.
+ *
+ * Provenance is what lets an AAC-built message be re-opened as symbols instead of only as text,
+ * and what lets diagnostics tell a tapped word from typed one.
+ */
+export type MessageOriginKind = 'text' | 'symbol' | 'phrase' | 'board-card' | 'dictation' | 'imported';
+
+export interface MessageOrigin {
+  kind: MessageOriginKind;
+  /** Stable id of the thing the segment came from (symbol id, phrase key, card id), when known. */
+  refId?: string;
+}
+
+/**
+ * One ordered piece of a message.
+ *
+ * Language and script are deliberately separate fields: `ml`+`Latn` is Manglish, `ml`+`Mlym` is
+ * Malayalam, and a single message may hold both plus English without collapsing into one language.
+ */
+export interface MessageSegment {
+  /** The resolved wording of this segment. */
+  text: string;
+  /** BCP-47 language subtag without script, e.g. `ml`, `en`, `hi`. */
+  language: string;
+  /** Unicode script subtag, e.g. `Latn`, `Mlym`, `Deva`, `Taml`, `Telu`, `Knda`. */
+  script: string;
+  origin: MessageOrigin;
+  /** Set when the wording stands alone (a tapped symbol) rather than flowing into neighbours. */
+  standalone?: boolean;
+}
+
+/** How the author wants a message rendered. Advisory only — renderers may override. */
+export interface MessageRenderHints {
+  /** Preferred output ordering hint; renderers decide the actual format. */
+  share?: 'text' | 'audio';
+}
+
+/**
+ * A structured utterance: what the person wants to communicate.
+ *
+ * A Message knows nothing about who is speaking (that is the Profile's job), what the device can
+ * do (Capabilities), or how it should finally be presented (rendering happens downstream). It does
+ * keep its own provenance and lineage so it can be edited and re-rendered later.
+ */
+export interface Message {
+  id: string;
+  segments: MessageSegment[];
+  meta: {
+    /** Where the message was authored. */
+    source: 'compose' | 'aac' | 'editor' | 'board' | 'imported';
+    /** Profile that created it, when known. */
+    profileId?: string;
+    createdAt: number;
+    updatedAt: number;
+    /** Lineage: ids of messages this one was derived from (translation, edit). Kept lightweight. */
+    parents?: string[];
+    flags?: { translated?: boolean; transliterated?: boolean; edited?: boolean };
+  };
+  renderHints?: MessageRenderHints;
+}
+
+/** One contiguous run of segments that share a language, ready to be spoken in one utterance. */
+export interface SpeechPlanEntry {
+  text: string;
+  language: string;
+  voiceId?: string;
+  rate?: number;
+  pitch?: number;
+}
+
+// endregion
+
+// region Sprint C: symbols
+
+/**
+ * Where a symbol's artwork comes from.
+ *
+ * Kept as data rather than a class hierarchy, so a new kind of artwork is a data change the board
+ * screen already knows how to draw.
+ */
+export type SymbolRepresentation =
+  /** A Unicode emoji glyph, drawn with the system font. */
+  | { kind: 'emoji'; glyph: string }
+  /** A picture on the device, as an absolute `file://` URI. */
+  | { kind: 'image'; uri: string };
+
+/**
+ * One symbol, whatever its artwork is.
+ *
+ * This is the shape the board screen consumes and the shape every provider must produce. The emoji
+ * starter set and the user's own photos are both `SymbolEntry`s, which is what lets them sit side
+ * by side on the same board.
+ */
+export interface SymbolEntry {
+  /** Stable id, stored in message provenance. */
+  id: string;
+  /** Category the symbol is grouped under; see `SymbolCategory.id`. */
+  category: string;
+  /** Wording per BCP-47 language tag. English (`en-IN`) is the fallback. */
+  words: Record<string, string>;
+  representation: SymbolRepresentation;
+  /** Id of the provider that owns this symbol. */
+  providerId: string;
+}
+
+/** A grouping of symbols on the board. */
+export interface SymbolCategory {
+  /** Stable id, referenced by `SymbolEntry.category`. */
+  id: string;
+  /** Human readable label. */
+  label: string;
+}
+
+/**
+ * The symbol abstraction.
+ *
+ * Mirrors `SpeechEngine`: the board talks to this interface, never to one concrete set of pictures,
+ * so the emoji starter set, an ARASAAC pack and the user's own photos are interchangeable. The
+ * methods are asynchronous even where today's implementation is instant, because a pack-backed
+ * provider has to read from the filesystem.
+ */
+export interface SymbolProvider {
+  /** Stable identifier, e.g. `starter`. */
+  readonly id: string;
+  /** Name shown in Settings and diagnostics. */
+  readonly displayName: string;
+  /** False when this provider currently has nothing usable to show. */
+  isAvailable(): Promise<boolean>;
+  /** Every symbol this provider offers. */
+  list(): Promise<SymbolEntry[]>;
+  /** The categories this provider groups its symbols into. */
+  categories(): Promise<SymbolCategory[]>;
+  /** One symbol by id, or `null` when this provider does not own it. */
+  get(id: string): Promise<SymbolEntry | null>;
+  /**
+   * Symbols whose wording matches `query` in `language`, including Indic keyword aliases. An empty
+   * query returns everything, which is what the board shows before anything is typed.
+   */
+  search(query: string, language: string): Promise<SymbolEntry[]>;
+}
+
+/** A picture the user added themselves. Stored on this device only. */
+export interface CustomSymbol {
+  id: string;
+  /** Profile that owns it; another profile never sees it. */
+  profileId: string;
+  /** The word this picture adds to a message. */
+  label: string;
+  /** BCP-47 tag of `label`. */
+  language: string;
+  /** Absolute `file://` URI of the image copied into the application's own storage. */
+  imageUri: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+// endregion
+
+// region Sprint C: downloadable packs
+
+/** What a downloadable pack contains. */
+export type PackKind = 'voice' | 'symbols';
+
+/** How a pack is packaged. Restricted to the formats the device can already verify. */
+export type PackArchiveFormat = 'tar.bz2' | 'zip';
+
+/** A file the pack must contain after extraction, used as a structural integrity check. */
+export interface PackFile {
+  /** Path relative to the extracted pack directory. */
+  path: string;
+  /** Exact size in bytes, when the publisher states one. */
+  bytes?: number;
+}
+
+/**
+ * A downloadable, install-once-use-offline-forever asset.
+ *
+ * Nothing described here is ever bundled into the APK: the catalogue only says what *can* be
+ * downloaded. That keeps the download small and, for a share-alike licence such as ARASAAC's, keeps
+ * the redistribution obligation honest — SwarSathi ships no third-party artwork, only a pointer.
+ */
+export interface PackDescriptor {
+  /** Catalogue id, which is also the upstream release asset name. */
+  id: string;
+  kind: PackKind;
+  displayName: string;
+  description: string;
+  /** BCP-47 tag the pack serves; empty for packs that are not language specific. */
+  language: string;
+  downloadBytes: number;
+  downloadUrl: string;
+  archive: PackArchiveFormat;
+  /** SHA-256 of the downloaded archive, verified before anything is extracted. */
+  sha256: string;
+  licence: string;
+  licenceUrl?: string;
+  /** Attribution line shown in Credits and repeated in `NOTICE`. */
+  attribution: string;
+  /** Files that must exist after extraction. */
+  requiredFiles: PackFile[];
+}
+
+/** A pack recorded as installed on this device. */
+export interface InstalledPack {
+  packId: string;
+  kind: PackKind;
+  language: string;
+  /** Absolute `file://` path of the extracted pack directory. */
+  directory: string;
+  bytes: number;
+  verified: boolean;
+  installedAt: number;
+}
+
+/** Lifecycle of a pack installation, as surfaced to the user. */
+export type PackInstallPhase =
+  | 'idle'
+  | 'checking-space'
+  | 'downloading'
+  | 'verifying'
+  | 'extracting'
+  | 'done'
+  | 'failed'
+  | 'cancelled';
+
+/** Progress for one in-flight (or just finished) pack installation. */
+export interface PackInstallState {
+  packId: string;
+  phase: PackInstallPhase;
+  bytesWritten: number;
+  totalBytes: number;
+  error?: { code: string; message: string };
+}
+
+// endregion
+
+// region Part 5: backup format
+
+/** Marker written into every backup file so a wrong file is rejected before it is trusted. */
+export const BACKUP_FORMAT = 'swarsathi.backup';
+
+/** Revision of the backup format. Raised when the shape of a backup changes. */
+export const BACKUP_VERSION = 1;
+
+/** A profile as it appears inside a backup file. */
+export interface BackupProfile {
+  id: string;
+  name: string;
+  description: string;
+  isDefault: boolean;
+  preferences: UserPreferences;
+  lastUsedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** A board and its cards as they appear inside a backup file. */
+export interface BackupBoard {
+  id: string;
+  title: string;
+  language: string;
+  isDefault: boolean;
+  sortOrder: number;
+  createdAt: number;
+  updatedAt: number;
+  cards: BoardCard[];
+}
+
+/** A favourite as it appears inside a backup file. */
+export interface BackupFavourite {
+  id: string;
+  profileId: string;
+  phraseId: string | null;
+  customMessageId: string | null;
+  sortOrder: number;
+  createdAt: number;
+}
+
+/** A profile's Home card layout as it appears inside a backup file. */
+export interface BackupHomeCard {
+  profileId: string;
+  key: string;
+  sortOrder: number;
+  enabled: boolean;
+}
+
+/** A profile's edited emergency wording as it appears inside a backup file. */
+export interface BackupEmergencyMessage {
+  profileId: string;
+  id: string;
+  language: string;
+  text: string;
+  updatedAt: number;
+}
+
+/** A caregiver configuration as it appears inside a backup file. */
+export interface BackupCaregiver {
+  enabled: boolean;
+  pinHash: string | null;
+  pinSalt: string | null;
+}
+
+/**
+ * The structured JSON backup.
+ *
+ * Deliberately excluded: everything spoken (the history and the frequency table), anything about
+ * which voices are installed, and any neural model binary. A backup carries the user's
+ * configuration, never a record of what they said.
+ */
+export interface BackupFile {
+  format: string;
+  version: number;
+  /** Version name of the application that wrote the file, for diagnostics only. */
+  appVersion: string;
+  exportedAt: number;
+  profiles: BackupProfile[];
+  boards: BackupBoard[];
+  customMessages: CustomMessage[];
+  favourites: BackupFavourite[];
+  homeCards: BackupHomeCard[];
+  emergencyMessages: BackupEmergencyMessage[];
+  caregiver: BackupCaregiver;
+}
+
+/** What a validated backup contains, shown to the user before anything is changed. */
+export interface BackupSummary {
+  version: number;
+  exportedAt: number;
+  profileCount: number;
+  boardCount: number;
+  cardCount: number;
+  customMessageCount: number;
+  favouriteCount: number;
+}
+
+/** The result of reading and validating a candidate backup file. */
+export type BackupValidation =
+  | { ok: true; backup: BackupFile; summary: BackupSummary }
+  | { ok: false; reason: BackupFailureReason };
+
+/** Why a backup file was refused. */
+export type BackupFailureReason =
+  /** The text is not JSON at all. */
+  | 'unreadable'
+  /** Valid JSON, but not a SwarSathi backup. */
+  | 'not-a-backup'
+  /** A backup from a newer application build than this one understands. */
+  | 'unsupported-version'
+  /** The file is a backup, but its contents are malformed beyond repair. */
+  | 'damaged';
+
+/** How an imported backup is applied. */
+export type BackupImportMode = 'merge' | 'replace';
+
+/** The outcome of applying a backup. */
+export type BackupImportResult =
+  | { ok: true; mode: BackupImportMode; importedProfiles: number; importedBoards: number }
+  | { ok: false; reason: 'invalid' | 'storage' };
 
 // endregion

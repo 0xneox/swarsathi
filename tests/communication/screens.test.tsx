@@ -76,6 +76,7 @@ beforeEach(async () => {
     emergencyMessages: buildEmergencyMessages(new Map(), 'en-IN'),
     communicationHistory: [],
     frequentMessages: [],
+    messageUsage: [],
     bootstrapStatus: 'ready',
     storageAvailable: true,
   });

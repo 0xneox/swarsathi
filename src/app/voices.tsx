@@ -9,18 +9,22 @@ import {
   Text,
   View,
 } from 'react-native';
+import { formatLanguageLabel } from '../data/languages';
 import {
   ESPEAK_NG_DATA,
   NEURAL_MODELS,
   formatBytes,
 } from '../data/neuralModels';
 import { useTheme } from '../providers/ThemeProvider';
+import { buildCapabilityMatrix } from '../services/speech/capabilityMatrix';
 import { useAppStore } from '../store/appStore';
 import type { NeuralModel } from '../types';
 
 export default function VoicesScreen() {
   const theme = useTheme();
 
+  const capabilities = useAppStore((state) => state.speech.capabilities);
+  const engineName = useAppStore((state) => state.speech.engineDisplayName);
   const installedModels = useAppStore((state) => state.installedModels);
   const modelInstallStates = useAppStore((state) => state.modelInstallStates);
   const installModel = useAppStore((state) => state.installModel);
@@ -36,6 +40,10 @@ export default function VoicesScreen() {
     () => installedModels.reduce((sum, m) => sum + m.bytes, 0),
     [installedModels]
   );
+
+  // The matrix always covers all six launch languages, whether or not the engine has reported on
+  // each of them yet, so the screen never hides a language the phone simply cannot speak.
+  const capabilityMatrix = useMemo(() => buildCapabilityMatrix(capabilities), [capabilities]);
 
   const handleInstall = (model: NeuralModel) => {
     installModel(model.id).catch((error) => {
@@ -104,6 +112,62 @@ export default function VoicesScreen() {
           </Text>
           <Text style={[mutedStyle, styles.hint]}>
             Downloaded voices work completely offline without internet or cloud services.
+          </Text>
+        </View>
+
+        {/* What this phone can speak — the honest, per-language capability matrix */}
+        <View style={styles.section} testID="capability-matrix">
+          <Text accessibilityRole="header" style={headingStyle}>
+            What this phone can speak
+          </Text>
+          <Text style={[mutedStyle, styles.hint]}>
+            {engineName
+              ? `Reported by the Android speech engine currently in use (${engineName}).`
+              : 'The speech engine has not reported its capabilities yet.'}
+          </Text>
+          {capabilityMatrix.map((row) => (
+            <View
+              key={row.language.code}
+              style={[styles.matrixRow, { borderColor: theme.colors.border }]}
+              accessible
+              accessibilityLabel={`${formatLanguageLabel(row.language)}: ${row.availabilityLabel}`}
+            >
+              <View style={styles.matrixHeader}>
+                <Text style={[bodyStyle, styles.flex, { fontWeight: '700' }]}>
+                  {formatLanguageLabel(row.language)}
+                </Text>
+                <Text
+                  style={[
+                    mutedStyle,
+                    {
+                      color:
+                        row.availability === 'available-offline'
+                          ? theme.colors.primary
+                          : theme.colors.textMuted,
+                      fontWeight: '700',
+                    },
+                  ]}
+                >
+                  {row.availabilityLabel}
+                </Text>
+              </View>
+              {row.voices.length > 0 ? (
+                <Text style={mutedStyle}>
+                  {row.offlineVoiceCount > 0
+                    ? `${row.offlineVoiceCount} of ${row.voices.length} voice(s) work offline`
+                    : row.onlineOnly
+                      ? 'Only internet voices are installed'
+                      : 'No installed voice yet'}
+                </Text>
+              ) : null}
+              {row.voiceNames.length > 0 ? (
+                <Text style={mutedStyle}>Voices: {row.voiceNames.join(', ')}</Text>
+              ) : null}
+            </View>
+          ))}
+          <Text style={[mutedStyle, styles.hint]}>
+            This table reflects the speech engine in use right now. Offline neural voices are a
+            separate engine and are listed below only once you have installed them.
           </Text>
         </View>
 
@@ -274,6 +338,11 @@ export default function VoicesScreen() {
           <Text style={[bodyStyle, { marginTop: 6 }]}>
             Tamil, Telugu, and Kannada do not have verified offline neural voices. When selected, SwarSathi automatically uses Android Text-to-Speech for those languages.
           </Text>
+          <Text style={[mutedStyle, { marginTop: 6 }]}>
+            The table above and this catalogue describe two different engines. SwarSathi only ever
+            asks the engine that is actually in use; an offline voice that has not been installed is
+            never reported as available.
+          </Text>
         </View>
       </ScrollView>
     </>
@@ -299,6 +368,18 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 14,
     marginBottom: 16,
+  },
+  matrixRow: {
+    borderWidth: 1,
+    borderRadius: 6,
+    padding: 10,
+    marginTop: 8,
+  },
+  matrixHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 8,
   },
   voiceHeader: {
     flexDirection: 'row',

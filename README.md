@@ -17,12 +17,18 @@ speaking difficult: type a message, press one button, and the phone says it out 
 - **Honest.** The app never claims a language or voice works until it has been verified on a real
   device.
 
-## Status — Parts 1 and 2
+## Status — Parts 1–5 (Production Release Candidate)
 
 **Part 1 (foundation)** — the reliable Android text-to-speech foundation. A person can open
 SwarSathi, type a sentence, press **Speak**, and hear the phone say it.
 
 **Part 2 (communication features)** — everyday communication through one-touch phrases.
+
+**Part 3 (neural voices)** — optional offline neural TTS via sherpa-onnx.
+
+**Part 4 (rapid communication)** — Home cards, history, frequency tracking, emergency messages, and Simplified Mode.
+
+**Part 5 (personalisation)** — multiple user profiles, context boards, caregiver PIN, and backup/restore.
 
 Implemented in Part 1:
 
@@ -55,8 +61,36 @@ Implemented in Part 2:
   Settings, with Speak still the largest control and the screen otherwise unchanged.
 - Jest + React Native Testing Library suite covering all of the above.
 
-**Not** implemented (deliberately): Part 3 features, neural voice downloads, cloud services, AI
-features, and voice cloning.
+Implemented in Part 3:
+
+- **Neural TTS integration** — sherpa-onnx-based offline neural voice engine via local Expo module
+- **Model download** — download, verify (SHA-256), and extract neural voice models
+- **Engine selection** — switch between Android TTS and Neural TTS in Settings
+- **Model management** — install, remove, and track installed neural models
+- **Storage migration** — schema version 3 for installed model metadata
+
+Implemented in Part 4:
+
+- **Home communication cards** — one-tap quick messages on the home screen
+- **Communication history** — recently spoken messages with replay capability
+- **Message frequency** — tracking and ranking of frequently spoken messages
+- **Emergency messages** — editable emergency communication with dedicated section
+- **Simplified Mode** — reduced UI for users who need minimal interaction
+- **History limit** — configurable cap on history retention
+- **Storage migration** — schema version 4 for communication data
+
+Implemented in Part 5:
+
+- **Communication profiles** — multiple user profiles with per-profile settings
+- **Context boards** — situation-specific communication boards with custom cards
+- **Board editor** — create, edit, duplicate, and delete boards and cards
+- **Profile switching** — switch between profiles without app restart
+- **Caregiver PIN** — optional lock for configuration screens
+- **Backup/restore** — local JSON backup and restore of all configuration
+- **Profile-scoped data** — favourites, Home layout, and emergency wording per profile
+- **Storage migration** — schema version 5 for profiles and boards
+
+**Not** implemented (deliberately): cloud services, AI features, analytics, tracking, and voice cloning.
 
 ### Important limitations
 

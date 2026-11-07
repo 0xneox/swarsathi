@@ -283,6 +283,68 @@ export function buildEmergencyMessages(
 
 // endregion
 
+// region Quick suggestions
+
+/** The four parts of the day the Home screen offers suggestions for. */
+export type TimeOfDay = 'morning' | 'afternoon' | 'evening' | 'night';
+
+/** Maps a 24-hour clock hour onto the part of the day it belongs to. */
+export function timeOfDayFor(hour: number): TimeOfDay {
+  if (hour >= 5 && hour < 12) {
+    return 'morning';
+  }
+  if (hour >= 12 && hour < 17) {
+    return 'afternoon';
+  }
+  if (hour >= 17 && hour < 22) {
+    return 'evening';
+  }
+  return 'night';
+}
+
+/**
+ * Three phrases offered above the editor, chosen for the time of day.
+ *
+ * These point at phrases in the bundled library rather than carrying their own wording, so the
+ * translations, the offline guarantee and the "draft needs native review" disclosure all come from
+ * the one place they already live.
+ */
+const QUICK_SUGGESTION_PHRASE_IDS: Record<TimeOfDay, readonly string[]> = {
+  morning: ['general-hello', 'medical-water', 'daily-food'],
+  afternoon: ['daily-food', 'medical-medication', 'daily-wait'],
+  evening: ['general-thanks', 'daily-sleep', 'family-fine'],
+  night: ['daily-sleep', 'medical-pain', 'emergency-help'],
+};
+
+export interface QuickSuggestion {
+  id: string;
+  text: string;
+  categoryLabel: string;
+}
+
+/**
+ * The suggestions to show for a language at a given hour.
+ *
+ * A suggestion whose phrase has left the library is skipped rather than rendered blank, so the list
+ * can never show an empty chip.
+ */
+export function buildQuickSuggestions(language: string, hour: number): QuickSuggestion[] {
+  return QUICK_SUGGESTION_PHRASE_IDS[timeOfDayFor(hour)].flatMap((id) => {
+    const phrase = getBundledPhrase(id);
+    return phrase
+      ? [
+          {
+            id: phrase.id,
+            text: resolvePhraseText(phrase, language),
+            categoryLabel: PHRASE_CATEGORY_LABELS[phrase.category],
+          },
+        ]
+      : [];
+  });
+}
+
+// endregion
+
 // region History helpers
 
 /** Smallest and largest number of history rows a user may keep. */

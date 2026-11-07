@@ -1,4 +1,5 @@
 import * as SQLite from 'expo-sqlite';
+import { BOARD_LIBRARY_VERSION, buildDefaultBoards } from '../../data/boards';
 import { PHRASE_LIBRARY_VERSION, buildAllPhraseRows } from '../../data/phrases';
 import type { InstalledModel, SavedMessage } from '../../types';
 import { logger } from '../../utils/logger';
@@ -31,6 +32,34 @@ export interface DatabaseConnection {
   runAsync(source: string, params: SQLite.SQLiteBindParams): Promise<unknown>;
   getFirstAsync<T>(source: string, params: SQLite.SQLiteBindParams): Promise<T | null>;
   getAllAsync<T>(source: string, params: SQLite.SQLiteBindParams): Promise<T[]>;
+  /**
+   * Runs `task` inside a single transaction, rolling back if it throws.
+   *
+   * Optional because the scripted test double does not model transactions; callers must fall back
+   * to running the work directly when it is absent. `expo-sqlite` provides it.
+   */
+  withTransactionAsync?(task: () => Promise<void>): Promise<void>;
+}
+
+/**
+ * Runs `work` in one transaction when the connection supports it, and directly when it does not.
+ *
+ * Import and profile-deletion touch several tables; a partial failure would leave a profile
+ * without its cards, or half an imported backup. Wrapping the work makes it all-or-nothing on a
+ * real device while keeping the in-memory and scripted test paths working unchanged.
+ */
+export async function withTransaction<T>(
+  database: DatabaseConnection,
+  work: () => Promise<T>
+): Promise<T> {
+  if (typeof database.withTransactionAsync === 'function') {
+    let result!: T;
+    await database.withTransactionAsync(async () => {
+      result = await work();
+    });
+    return result;
+  }
+  return work();
 }
 
 /** Applied to every new connection, before any table is touched. */
@@ -40,7 +69,7 @@ PRAGMA foreign_keys = ON;
 `;
 
 /** The schema revision this build expects. Recorded in SQLite's own `user_version`. */
-export const LATEST_SCHEMA_VERSION = 4;
+export const LATEST_SCHEMA_VERSION = 9;
 
 /** A column a migration must add when an older database does not have it yet. */
 export interface ColumnUpgrade {
@@ -238,6 +267,202 @@ export const MIGRATIONS: Migration[] = [
       },
     ],
   },
+  {
+    version: 5,
+    description: 'Communication profiles, context boards, profile-scoped favourites and caregiver settings',
+    statements: [
+      // A profile is one person's way of communicating: their language, their engine, their speed,
+      // and the cards and wording they chose. SwarSathi writes one here so the rest of the migration
+      // has a profile to attach the existing settings to. `isDefault` marks it as the one the app
+      // created; it may be renamed but never deleted.
+      `CREATE TABLE IF NOT EXISTS communication_profiles (
+        id TEXT PRIMARY KEY NOT NULL,
+        name TEXT NOT NULL,
+        isDefault INTEGER NOT NULL DEFAULT 0,
+        sortOrder INTEGER NOT NULL DEFAULT 0,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL
+      )`,
+      // One row per profile. A profile that has never been saved simply has no row, and the
+      // application falls back to the shipped defaults rather than inventing values.
+      `CREATE TABLE IF NOT EXISTS profile_preferences (
+        profileId TEXT PRIMARY KEY NOT NULL,
+        engineId TEXT NOT NULL DEFAULT 'android-tts',
+        language TEXT NOT NULL,
+        speechRate REAL NOT NULL,
+        pitch REAL NOT NULL,
+        voiceId TEXT,
+        fontScale REAL NOT NULL,
+        highContrast INTEGER NOT NULL,
+        simplifiedMode INTEGER NOT NULL DEFAULT 0,
+        historyLimit INTEGER NOT NULL DEFAULT 50
+      )`,
+      // A context board: the cards that suit one situation. Boards are shared by every profile -
+      // one household has one "Hospital" board - while the layout around them is per profile.
+      `CREATE TABLE IF NOT EXISTS communication_boards (
+        id TEXT PRIMARY KEY NOT NULL,
+        title TEXT NOT NULL,
+        language TEXT NOT NULL,
+        isDefault INTEGER NOT NULL DEFAULT 0,
+        sortOrder INTEGER NOT NULL,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_communication_boards_sort_order
+        ON communication_boards (sortOrder)`,
+      // A card either borrows a bundled phrase (`phraseId`) or carries its own wording (`text`).
+      // Deleting a board takes its cards with it, so an orphaned card can never be rendered.
+      `CREATE TABLE IF NOT EXISTS board_cards (
+        id TEXT PRIMARY KEY NOT NULL,
+        boardId TEXT NOT NULL REFERENCES communication_boards (id) ON DELETE CASCADE,
+        phraseId TEXT,
+        label TEXT NOT NULL DEFAULT '',
+        text TEXT NOT NULL DEFAULT '',
+        language TEXT NOT NULL,
+        sortOrder INTEGER NOT NULL,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_board_cards_board_sort_order
+        ON board_cards (boardId, sortOrder)`,
+      // Home cards and emergency wording belong to a profile, so both are keyed by profile. These
+      // replace the Part 4 `home_cards` and `emergency_messages` tables, whose primary keys cannot
+      // carry a second profile. The Part 4 tables are left in place and are no longer written.
+      `CREATE TABLE IF NOT EXISTS profile_home_cards (
+        profileId TEXT NOT NULL,
+        key TEXT NOT NULL,
+        sortOrder INTEGER NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        PRIMARY KEY (profileId, key)
+      )`,
+      `CREATE TABLE IF NOT EXISTS profile_emergency_messages (
+        profileId TEXT NOT NULL,
+        id TEXT NOT NULL,
+        language TEXT NOT NULL,
+        text TEXT NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        PRIMARY KEY (profileId, id, language)
+      )`,
+      // A caregiver may be allowed to help arrange boards and messages. The PIN is never stored,
+      // only a salted iterated hash of it, and the whole feature is off unless the user turns it on.
+      `CREATE TABLE IF NOT EXISTS caregiver_settings (
+        id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
+        enabled INTEGER NOT NULL DEFAULT 0,
+        pinHash TEXT,
+        pinSalt TEXT,
+        pinIterations INTEGER NOT NULL DEFAULT 0,
+        updatedAt INTEGER NOT NULL
+      )`,
+      // The profile the migrated settings belong to. `IF NOT EXISTS` semantics come from the `OR
+      // IGNORE`; the id is a constant, so replaying this can never create a second default.
+      `INSERT OR IGNORE INTO communication_profiles (id, name, isDefault, sortOrder, createdAt, updatedAt)
+        VALUES ('profile-default', 'Default', 1, 0, 0, 0)`,
+      // Part 1 stored the settings once for the whole device. They become the default profile's
+      // settings, so an existing user opens the new build to exactly what they had before.
+      `INSERT OR IGNORE INTO profile_preferences
+         (profileId, engineId, language, speechRate, pitch, voiceId, fontScale, highContrast, simplifiedMode, historyLimit)
+        SELECT 'profile-default', engineId, language, speechRate, pitch, voiceId, fontScale, highContrast, simplifiedMode, historyLimit
+          FROM user_preferences WHERE id = 1`,
+      // Part 4's Home layout and edited emergency wording are likewise carried across.
+      `INSERT OR IGNORE INTO profile_home_cards (profileId, key, sortOrder, enabled)
+        SELECT 'profile-default', key, sortOrder, enabled FROM home_cards`,
+      `INSERT OR IGNORE INTO profile_emergency_messages (profileId, id, language, text, updatedAt)
+        SELECT 'profile-default', id, language, text, updatedAt FROM emergency_messages`,
+    ],
+    ensureColumns: [
+      // Favourites are already keyed by a plain id, so a profile column is all that is needed. The
+      // default backfills every existing row onto the default profile, which means no favourite is
+      // ever lost by the upgrade. The column cannot be added by a statement: SQLite has no
+      // `ADD COLUMN IF NOT EXISTS`, so the runner checks `PRAGMA table_info` first.
+      {
+        table: 'favourites',
+        column: 'profileId',
+        definition: `TEXT NOT NULL DEFAULT 'profile-default'`,
+      },
+    ],
+  },
+  {
+    version: 6,
+    description: 'Profile description and last-used tracking',
+    statements: [],
+    ensureColumns: [
+      // A short note on what each profile is for, so a caregiver who has forgotten why they made
+      // "Hospital" and "Home" separate can read it on the tile. Empty by default.
+      {
+        table: 'communication_profiles',
+        column: 'description',
+        definition: `TEXT NOT NULL DEFAULT ''`,
+      },
+      // When the profile was last switched to, so the list can say "Last used: 2 days ago". Nullable
+      // because a profile that has never been used has no such moment.
+      {
+        table: 'communication_profiles',
+        column: 'lastUsedAt',
+        definition: 'INTEGER',
+      },
+    ],
+  },
+  {
+    version: 7,
+    description: 'Composed messages (Part 6 unified Message model)',
+    statements: [
+      // Structured messages built in Compose or on the symbol board. `payload` holds the full
+      // Message JSON (segments, provenance, lineage); `text`/`language` are denormalised for
+      // display and search. Profile-scoped like favourites and Home cards.
+      `CREATE TABLE IF NOT EXISTS composed_messages (
+        id TEXT PRIMARY KEY NOT NULL,
+        profileId TEXT NOT NULL DEFAULT 'profile-default',
+        payload TEXT NOT NULL,
+        text TEXT NOT NULL,
+        language TEXT NOT NULL,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_composed_messages_profile_updated
+        ON composed_messages (profileId, updatedAt DESC)`,
+    ],
+  },
+  {
+    version: 8,
+    description: 'Custom symbols (user photos on the AAC board)',
+    statements: [
+      // A picture the user added themselves. Profile-scoped like favourites and Home cards: a
+      // picture one person added for themselves must not appear on another person's board. The
+      // image itself lives on the filesystem; only the pointer is stored here.
+      `CREATE TABLE IF NOT EXISTS custom_symbols (
+        id TEXT PRIMARY KEY NOT NULL,
+        profileId TEXT NOT NULL DEFAULT 'profile-default',
+        label TEXT NOT NULL,
+        language TEXT NOT NULL,
+        imageUri TEXT NOT NULL,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_custom_symbols_profile
+        ON custom_symbols (profileId, createdAt)`,
+    ],
+  },
+  {
+    version: 9,
+    description: 'Installed offline packs (Sprint C Tier 1 scaffolding)',
+    statements: [
+      // Metadata for download-once-use-offline-forever assets: voice packs and symbol packs. Like
+      // installed_models, the payload stays on the filesystem and only the record is stored here.
+      // Device-scoped rather than profile-scoped: an installed pack is a fact about the phone, not
+      // about a person, so every profile can use it without downloading it twice.
+      `CREATE TABLE IF NOT EXISTS installed_packs (
+        packId TEXT PRIMARY KEY NOT NULL,
+        kind TEXT NOT NULL,
+        language TEXT NOT NULL,
+        directory TEXT NOT NULL,
+        bytes INTEGER NOT NULL,
+        verified INTEGER NOT NULL DEFAULT 0,
+        installedAt INTEGER NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_installed_packs_kind
+        ON installed_packs (kind, installedAt)`,
+    ],
+  },
 ];
 
 /** Reads the schema revision recorded in the database file. */
@@ -360,6 +585,70 @@ export async function seedDefaultPhrases(
   return rows.length;
 }
 
+/** Key in `app_meta` that remembers which revision of the bundled boards has been seeded. */
+export const BOARD_SEED_META_KEY = 'boards_seed_version';
+
+/**
+ * Copies the bundled context boards into the database.
+ *
+ * A fresh install would otherwise show no boards at all, and a board is the fastest route from "I
+ * need the bathroom" to being understood. Wording is not copied: every seeded card points at a
+ * bundled phrase, so translations come from the phrase library. Ids are deterministic, so
+ * `INSERT OR IGNORE` tops a board up after a later build adds a card without disturbing the edits
+ * the user has already made to it.
+ */
+export async function seedDefaultBoards(
+  database: DatabaseConnection,
+  createdAt = 0
+): Promise<number> {
+  const seeded = await readAppMeta(database, BOARD_SEED_META_KEY);
+  if (seeded === String(BOARD_LIBRARY_VERSION)) {
+    return 0;
+  }
+
+  const boards = buildDefaultBoards(createdAt);
+  let written = 0;
+  for (const { board, cards } of boards) {
+    await database.runAsync(
+      `INSERT OR IGNORE INTO communication_boards
+         (id, title, language, isDefault, sortOrder, createdAt, updatedAt)
+       VALUES ($id, $title, $language, $isDefault, $sortOrder, $createdAt, $updatedAt)`,
+      {
+        $id: board.id,
+        $title: board.title,
+        $language: board.language,
+        $isDefault: board.isDefault ? 1 : 0,
+        $sortOrder: board.sortOrder,
+        $createdAt: board.createdAt,
+        $updatedAt: board.updatedAt,
+      }
+    );
+    written += 1;
+    for (const card of cards) {
+      await database.runAsync(
+        `INSERT OR IGNORE INTO board_cards
+           (id, boardId, phraseId, label, text, language, sortOrder, createdAt, updatedAt)
+         VALUES ($id, $boardId, $phraseId, $label, $text, $language, $sortOrder, $createdAt, $updatedAt)`,
+        {
+          $id: card.id,
+          $boardId: card.boardId,
+          $phraseId: card.phraseId,
+          $label: card.label,
+          $text: card.text,
+          $language: card.language,
+          $sortOrder: card.sortOrder,
+          $createdAt: card.createdAt,
+          $updatedAt: card.updatedAt,
+        }
+      );
+      written += 1;
+    }
+  }
+
+  await writeAppMeta(database, BOARD_SEED_META_KEY, String(BOARD_LIBRARY_VERSION));
+  return written;
+}
+
 let connection: DatabaseConnection | null = null;
 let opening: Promise<DatabaseConnection> | null = null;
 
@@ -391,6 +680,13 @@ async function openConnection(): Promise<DatabaseConnection> {
       // and the phrase repository serves the bundled copy whenever the table is empty. A failed
       // seed must therefore never cost the user their saved messages by failing the connection.
       logger.warn(SCOPE, 'Could not seed the bundled phrases', error);
+    }
+    try {
+      await seedDefaultBoards(database);
+    } catch (error) {
+      // Same reasoning as the phrase seed: the default boards are a starting point, and a device
+      // that cannot write them should still open - the boards screen simply starts empty.
+      logger.warn(SCOPE, 'Could not seed the default communication boards', error);
     }
     logger.info(SCOPE, 'Local database ready');
     return database;

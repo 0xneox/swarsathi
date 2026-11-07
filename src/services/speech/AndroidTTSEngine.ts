@@ -47,13 +47,17 @@ export class AndroidTTSEngine implements SpeechEngine {
       return;
     }
 
-    this.bridgeUnsubscribe = this.bridge.subscribe({
-      onStart: (utteranceId) => this.emit((listener) => listener.onStart?.(utteranceId)),
-      onDone: (utteranceId) => this.emit((listener) => listener.onDone?.(utteranceId)),
-      onStopped: (utteranceId, interrupted) =>
-        this.emit((listener) => listener.onStopped?.(utteranceId, interrupted)),
-      onError: (error) => this.emit((listener) => listener.onError?.(error)),
-    });
+    // Subscribe once: a retry after a failed start-up must not attach a second forwarder, which
+    // would make every native speech event arrive twice.
+    if (!this.bridgeUnsubscribe) {
+      this.bridgeUnsubscribe = this.bridge.subscribe({
+        onStart: (utteranceId) => this.emit((listener) => listener.onStart?.(utteranceId)),
+        onDone: (utteranceId) => this.emit((listener) => listener.onDone?.(utteranceId)),
+        onStopped: (utteranceId, interrupted) =>
+          this.emit((listener) => listener.onStopped?.(utteranceId, interrupted)),
+        onError: (error) => this.emit((listener) => listener.onError?.(error)),
+      });
+    }
 
     await this.bridge.initialize();
     this.initialized = true;

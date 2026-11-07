@@ -23,13 +23,20 @@ import {
   InMemoryPhraseRepository,
 } from '../../src/services/storage/phrases';
 import {
+  InMemoryCommunicationHistoryRepository,
+  InMemoryEmergencyMessageRepository,
+  InMemoryFrequencyRepository,
+  InMemoryHomeCardRepository,
+} from '../../src/services/storage/communication';
+import {
   getSpeechController,
+  setCommunicationStorageForTesting,
   setPhraseStorageForTesting,
   setSpeechControllerForTesting,
   setStorageRepositoriesForTesting,
   useAppStore,
 } from '../../src/store/appStore';
-import { DEFAULT_PREFERENCES, type LanguageCapability } from '../../src/types';
+import { DEFAULT_PREFERENCES, type FavouriteEntry, type LanguageCapability, type PhraseCategoryId } from '../../src/types';
 import { MockSpeechEngine } from '../speech/MockSpeechEngine';
 
 const CAPABILITIES: LanguageCapability[] = [
@@ -50,6 +57,8 @@ function resetStore(): void {
     favourites: [],
     favouriteEntries: [],
     customMessages: [],
+    frequentMessages: [],
+    messageUsage: [],
     bootstrapStatus: 'ready',
     storageAvailable: true,
   });
@@ -67,6 +76,12 @@ beforeEach(async () => {
     new InMemoryFavouriteRepository(),
     new InMemoryCustomMessageRepository()
   );
+  setCommunicationStorageForTesting(
+    new InMemoryHomeCardRepository(),
+    new InMemoryCommunicationHistoryRepository(),
+    new InMemoryFrequencyRepository(),
+    new InMemoryEmergencyMessageRepository()
+  );
   resetStore();
   await getSpeechController().initialize();
   await useAppStore.getState().refreshLibrary();
@@ -77,6 +92,7 @@ afterEach(() => {
   setSpeechControllerForTesting(null);
   setStorageRepositoriesForTesting(null, null);
   setPhraseStorageForTesting(null, null, null);
+  setCommunicationStorageForTesting(null, null, null, null);
 });
 
 describe('Saved Messages screen', () => {
@@ -206,6 +222,153 @@ describe('Saved Messages screen', () => {
   });
 });
 
+describe('Saved Messages screen - finding and clearing messages', () => {
+  async function seed(text: string, category: PhraseCategoryId = 'general') {
+    const result = await useAppStore.getState().createCustomMessage({
+      title: null,
+      text,
+      language: 'en-IN',
+      category,
+    });
+    if (!result.ok) throw new Error('expected the message to be created');
+    return result.message;
+  }
+
+  /** The order the given message texts appear in, top to bottom. */
+  const cardTexts = (labels: string[]): string[] => {
+    const pattern = new RegExp(`^(${labels.join('|')})$`);
+    return screen.getAllByText(pattern).map((node) => node.props.children as string);
+  };
+
+  it('narrows the list to what the search matches', async () => {
+    await seed('Apple pie');
+    await seed('Zebra crossing');
+    await render(<SavedMessagesScreen />);
+
+    await fireEvent.changeText(screen.getByTestId('message-search'), 'zebra');
+
+    expect(screen.getByText('Zebra crossing')).toBeTruthy();
+    expect(screen.queryByText('Apple pie')).toBeNull();
+  });
+
+  it('matches on the message title as well as its wording', async () => {
+    const result = await useAppStore.getState().createCustomMessage({
+      title: 'Medication',
+      text: 'It is time for my tablets.',
+      language: 'en-IN',
+      category: 'medical',
+    });
+    if (!result.ok) throw new Error('expected the message to be created');
+    await render(<SavedMessagesScreen />);
+
+    await fireEvent.changeText(screen.getByTestId('message-search'), 'medication');
+
+    expect(screen.getByText('It is time for my tablets.')).toBeTruthy();
+  });
+
+  it('explains when nothing matches and clears the search again', async () => {
+    await seed('Apple pie');
+    await render(<SavedMessagesScreen />);
+
+    await fireEvent.changeText(screen.getByTestId('message-search'), 'zzz');
+    expect(screen.getByText(/No messages match/)).toBeTruthy();
+
+    await fireEvent.press(screen.getByTestId('message-search-clear'));
+
+    expect(screen.getByText('Apple pie')).toBeTruthy();
+  });
+
+  it('orders the list a-z when the A-Z option is chosen', async () => {
+    await seed('Zebra crossing');
+    await seed('Apple pie');
+    await render(<SavedMessagesScreen />);
+
+    await fireEvent.press(screen.getByTestId('message-sort-alphabetical'));
+
+    expect(cardTexts(['Apple pie', 'Zebra crossing'])[0]).toBe('Apple pie');
+  });
+
+  it('groups by the shared category order when Category is chosen', async () => {
+    // Emergency sorts before Travel, so the zebra note should lead despite its wording.
+    await seed('Zebra note', 'emergency');
+    await seed('Alpha note', 'travel');
+    await render(<SavedMessagesScreen />);
+
+    await fireEvent.press(screen.getByTestId('message-sort-category'));
+
+    expect(cardTexts(['Alpha note', 'Zebra note'])[0]).toBe('Zebra note');
+  });
+
+  it('marks the chosen sort option without relying on colour alone', async () => {
+    await seed('Apple pie');
+    await render(<SavedMessagesScreen />);
+
+    await fireEvent.press(screen.getByTestId('message-sort-alphabetical'));
+
+    expect(screen.getByText('✓ A\u2013Z')).toBeTruthy();
+    expect(screen.getByTestId('message-sort-alphabetical').props.accessibilityState).toMatchObject({
+      selected: true,
+    });
+  });
+
+  it('switches the message text to the compact size and back', async () => {
+    await seed('Apple pie');
+    await render(<SavedMessagesScreen />);
+
+    await fireEvent.press(screen.getByTestId('message-compact-toggle'));
+    expect(screen.getByText('✓ Compact')).toBeTruthy();
+    expect(screen.getByTestId('message-compact-toggle').props.accessibilityState).toMatchObject({
+      selected: true,
+    });
+
+    await fireEvent.press(screen.getByTestId('message-compact-toggle'));
+    expect(screen.getByText('Compact')).toBeTruthy();
+  });
+
+  it('picks several messages and deletes them in one confirmed action', async () => {
+    const first = await seed('Apple pie');
+    const second = await seed('Zebra crossing');
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+    await render(<SavedMessagesScreen />);
+
+    await fireEvent.press(screen.getByTestId('message-select-toggle'));
+    await fireEvent.press(screen.getByTestId(`saved-message-${first.id}`));
+    await fireEvent.press(screen.getByTestId(`saved-message-${second.id}`));
+
+    expect(screen.getByText('Delete selected (2)')).toBeTruthy();
+    await fireEvent.press(screen.getByTestId('message-delete-selected'));
+
+    const buttons = alert.mock.calls[0][2] ?? [];
+    buttons.find((button) => button.style === 'destructive')?.onPress?.();
+
+    await waitFor(() => expect(useAppStore.getState().customMessages).toHaveLength(0));
+  });
+
+  it('does not speak a message while it is being picked for deletion', async () => {
+    const created = await seed('Apple pie');
+    await render(<SavedMessagesScreen />);
+
+    await fireEvent.press(screen.getByTestId('message-select-toggle'));
+    await fireEvent.press(screen.getByTestId(`saved-message-${created.id}`));
+
+    expect(engine.utterances).toHaveLength(0);
+    // Picking replaces speaking, so the row's own Edit and Delete actions step aside.
+    expect(screen.queryByTestId(`saved-message-${created.id}-delete`)).toBeNull();
+    expect(screen.queryByTestId(`saved-message-${created.id}-edit`)).toBeNull();
+  });
+
+  it('reveals a Delete action beside each row for the swipe shortcut', async () => {
+    const created = await seed('Apple pie');
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+    await render(<SavedMessagesScreen />);
+
+    expect(screen.getByTestId(`saved-message-swipe-${created.id}`)).toBeTruthy();
+    await fireEvent.press(screen.getByTestId(`saved-message-swipe-${created.id}-delete`));
+
+    expect(alert).toHaveBeenCalled();
+  });
+});
+
 describe('Favourites screen', () => {
   async function seedFavourites(): Promise<void> {
     await useAppStore.getState().addPhraseFavourite(PHRASES[0].id);
@@ -276,5 +439,106 @@ describe('Favourites screen', () => {
     const card = screen.getByTestId(`favourite-${first.id}`);
     expect(card.props.accessibilityLabel).toContain('Saved to favourites.');
     expect(card.props.accessibilityLabel).toContain(PHRASES[0].text);
+  });
+
+  async function seedThreeFavourites(): Promise<void> {
+    await useAppStore.getState().addPhraseFavourite(PHRASES[0].id);
+    await useAppStore.getState().addPhraseFavourite(PHRASES[1].id);
+    await useAppStore.getState().addPhraseFavourite(PHRASES[2].id);
+  }
+
+  it('jumps a favourite straight to the top with one press', async () => {
+    await seedThreeFavourites();
+    await render(<FavouritesScreen />);
+
+    const [first, second, third] = useAppStore.getState().favourites;
+    await fireEvent.press(screen.getByTestId(`favourite-${third.id}-move-top`));
+
+    await waitFor(() =>
+      expect(useAppStore.getState().favourites.map((favourite) => favourite.id)).toEqual([
+        third.id,
+        first.id,
+        second.id,
+      ])
+    );
+  });
+
+  it('cannot move an entry that is already first to the top', async () => {
+    await seedThreeFavourites();
+    await render(<FavouritesScreen />);
+
+    const [first] = useAppStore.getState().favourites;
+    expect(
+      screen.getByTestId(`favourite-${first.id}-move-top`).props.accessibilityState
+    ).toMatchObject({ disabled: true });
+  });
+
+  it('puts the most used favourite first when sorted by Most used', async () => {
+    await seedFavourites();
+    const [first, second] = useAppStore.getState().favouriteEntries;
+    await useAppStore.getState().speakText(second.text, second.language);
+    await useAppStore.getState().speakText(second.text, second.language);
+    await render(<FavouritesScreen />);
+
+    await fireEvent.press(screen.getByTestId('favourites-sort-most-used'));
+
+    const list = screen.getByTestId('favourites-list');
+    expect((list.props.data as FavouriteEntry[]).map((entry) => entry.favourite.id)).toEqual([
+      second.favourite.id,
+      first.favourite.id,
+    ]);
+    // Automatic sorts have no fixed order to nudge, so the manual move buttons step aside.
+    expect(screen.queryByTestId(`favourite-${first.favourite.id}-move-up`)).toBeNull();
+  });
+
+  it('puts the most recently used favourite first when sorted by Recent', async () => {
+    await seedFavourites();
+    const [first, second] = useAppStore.getState().favouriteEntries;
+    await useAppStore.getState().speakText(second.text, second.language);
+    await render(<FavouritesScreen />);
+
+    await fireEvent.press(screen.getByTestId('favourites-sort-recent'));
+
+    const list = screen.getByTestId('favourites-list');
+    expect((list.props.data as FavouriteEntry[]).map((entry) => entry.favourite.id)).toEqual([
+      second.favourite.id,
+      first.favourite.id,
+    ]);
+  });
+
+  it('reorders by picking a favourite up and placing it, without speaking', async () => {
+    await seedThreeFavourites();
+    await render(<FavouritesScreen />);
+
+    const [first, second, third] = useAppStore.getState().favourites;
+    await fireEvent.press(screen.getByTestId('favourites-reorder-toggle'));
+    await fireEvent.press(screen.getByTestId(`favourite-${first.id}`));
+
+    const picked = screen.getByTestId(`favourite-${first.id}`);
+    expect(picked.props.accessibilityState).toMatchObject({ selected: true });
+    expect(picked.props.accessibilityLabel).toContain('Picked up.');
+
+    await fireEvent.press(screen.getByTestId(`favourite-${third.id}`));
+
+    await waitFor(() =>
+      expect(useAppStore.getState().favourites.map((favourite) => favourite.id)).toEqual([
+        second.id,
+        third.id,
+        first.id,
+      ])
+    );
+    expect(engine.utterances).toHaveLength(0);
+  });
+
+  it('shows how often a favourite has been used', async () => {
+    await seedFavourites();
+    const [first] = useAppStore.getState().favouriteEntries;
+    await useAppStore.getState().speakText(first.text, first.language);
+    await useAppStore.getState().speakText(first.text, first.language);
+    await render(<FavouritesScreen />);
+
+    const card = screen.getByTestId(`favourite-${first.favourite.id}`);
+    expect(card.props.accessibilityLabel).toContain('Used 2 times.');
+    expect(screen.getByText('Used 2 times')).toBeTruthy();
   });
 });

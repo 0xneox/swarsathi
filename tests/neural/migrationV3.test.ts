@@ -5,8 +5,10 @@ import {
 import { FakeDatabase } from '../storage/FakeDatabase';
 
 describe('LATEST_SCHEMA_VERSION', () => {
-  it('is exactly 4', () => {
-    expect(LATEST_SCHEMA_VERSION).toBe(4);
+  it('is at least 3, since migration v3 introduced installed_models', () => {
+    // Later Parts raise the version (Part 4 to 4, Part 5 to 5); this file only guards that the
+    // migration it exercises is still reachable, so it tracks the invariant rather than a literal.
+    expect(LATEST_SCHEMA_VERSION).toBeGreaterThanOrEqual(3);
   });
 });
 
