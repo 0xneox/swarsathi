@@ -2,6 +2,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React from 'react';
 import { AppProviders } from '../providers/AppProviders';
+import { SoundAlertOverlay } from '../components/SoundAlertOverlay';
 
 /**
  * Root layout.
@@ -19,6 +20,9 @@ export default function RootLayout() {
       <Stack screenOptions={{ headerTitleAlign: 'center', headerBackTitle: 'Back' }}>
         <Stack.Screen name="index" options={{ headerShown: false }} />
         <Stack.Screen name="compose" options={{ title: 'Compose' }} />
+        <Stack.Screen name="translate" options={{ title: 'Language Centre' }} />
+        <Stack.Screen name="isl" options={{ title: 'Indian Sign Language' }} />
+        <Stack.Screen name="conversation" options={{ title: 'Conversation' }} />
         <Stack.Screen name="aac" options={{ title: 'Symbol board' }} />
         <Stack.Screen name="emergency" options={{ title: 'Emergency' }} />
         <Stack.Screen name="home-cards" options={{ title: 'Home cards' }} />
@@ -34,7 +38,10 @@ export default function RootLayout() {
         <Stack.Screen name="settings" options={{ title: 'Settings' }} />
         <Stack.Screen name="voices" options={{ title: 'Offline Voices' }} />
         <Stack.Screen name="credits" options={{ title: 'Credits and licences' }} />
+        <Stack.Screen name="sounds" options={{ title: 'Sound awareness' }} />
       </Stack>
+      {/* Sound Awareness alerts float above every screen (vision.md §2D). */}
+      <SoundAlertOverlay />
     </AppProviders>
   );
 }

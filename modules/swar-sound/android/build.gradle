@@ -1,0 +1,26 @@
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+apply plugin: 'expo-module-gradle-plugin'
+
+group = 'expo.modules.swarsound'
+version = '0.1.0'
+
+android {
+  namespace "expo.modules.swarsound"
+
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+
+  lintOptions {
+    abortOnError false
+  }
+}
+
+dependencies {
+  // TensorFlow Lite runtime for the bundled YAMNet model (Apache-2.0). The AAR ships the native
+  // `libtensorflowlite_jni` for every Android ABI, so no NDK build step is required. Pinned to a
+  // mature release; YAMNet uses only built-in operators, so no select-ops package is needed.
+  implementation 'org.tensorflow:tensorflow-lite:2.14.0'
+}

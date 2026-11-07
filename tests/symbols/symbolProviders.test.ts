@@ -15,7 +15,9 @@ import { keywordsForSymbol } from '../../src/data/symbolKeywords';
 import {
   STARTER_PROVIDER_ID,
   STARTER_SYMBOL_ENTRIES,
+  STARTER_SYMBOLS,
   SYMBOL_CATEGORIES,
+  symbolEntryTranslationMissing,
 } from '../../src/data/symbols';
 import { InMemoryCustomSymbolRepository } from '../../src/services/storage/customSymbols';
 import { DEFAULT_PROFILE_ID } from '../../src/services/storage/profileScope';
@@ -41,6 +43,31 @@ function makeCustomSymbol(overrides: Partial<CustomSymbol> = {}): CustomSymbol {
     ...overrides,
   };
 }
+
+/** Every language a bundled symbol must carry a word for. */
+const BUNDLED_LANGUAGES = ['en-IN', 'ml-IN', 'hi-IN', 'ta-IN', 'te-IN', 'kn-IN'];
+
+describe('the bundled symbol set', () => {
+  it('gives every symbol its own picture, so no glyph means two things', () => {
+    const glyphs = STARTER_SYMBOLS.map((symbol) => symbol.glyph);
+    expect(new Set(glyphs).size).toBe(glyphs.length);
+  });
+
+  it('carries a word in all six languages for every symbol', () => {
+    for (const entry of STARTER_SYMBOL_ENTRIES) {
+      for (const language of BUNDLED_LANGUAGES) {
+        expect(entry.words[language]).toBeTruthy();
+      }
+    }
+  });
+
+  it('reports the English fallback only when the language is genuinely absent', () => {
+    const entry = STARTER_SYMBOL_ENTRIES[0];
+    expect(symbolEntryTranslationMissing(entry, 'ml-IN')).toBe(false);
+    // Bengali is not one of the six, so the tile would be showing English.
+    expect(symbolEntryTranslationMissing(entry, 'bn-IN')).toBe(true);
+  });
+});
 
 describe('keywordsForSymbol', () => {
   it('returns the recorded synonyms for a symbol and language', () => {

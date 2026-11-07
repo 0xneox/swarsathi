@@ -1,5 +1,5 @@
 import { Stack } from 'expo-router';
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -9,16 +9,23 @@ import {
   Text,
   View,
 } from 'react-native';
-import { formatLanguageLabel } from '../data/languages';
+import { formatLanguageLabel, getLanguageByCode } from '../data/languages';
 import {
   ESPEAK_NG_DATA,
   NEURAL_MODELS,
   formatBytes,
 } from '../data/neuralModels';
+import {
+  VOICE_PERSONAS,
+  getVoicePersona,
+  matchVoiceForGender,
+  offlineVoicesForLanguage,
+  type VoicePersona,
+} from '../data/personas';
 import { useTheme } from '../providers/ThemeProvider';
 import { buildCapabilityMatrix } from '../services/speech/capabilityMatrix';
-import { useAppStore } from '../store/appStore';
-import type { NeuralModel } from '../types';
+import { getSpeechController, useAppStore } from '../store/appStore';
+import type { NeuralModel, SpeechOptions, VoiceGender } from '../types';
 
 export default function VoicesScreen() {
   const theme = useTheme();
@@ -30,6 +37,18 @@ export default function VoicesScreen() {
   const installModel = useAppStore((state) => state.installModel);
   const removeModel = useAppStore((state) => state.removeModel);
   const cancelModelInstall = useAppStore((state) => state.cancelModelInstall);
+  const preferences = useAppStore((state) => state.preferences);
+  const setPersona = useAppStore((state) => state.setPersona);
+  const setVoiceGender = useAppStore((state) => state.setVoiceGender);
+
+  const [previewingPersona, setPreviewingPersona] = useState<string | null>(null);
+
+  const activePersona = getVoicePersona(preferences.personaId);
+  const gender = preferences.voiceGender ?? 'any';
+  const genderMatchedVoice = useMemo(
+    () => matchVoiceForGender(offlineVoicesForLanguage(capabilities, preferences.language), gender),
+    [capabilities, preferences.language, gender]
+  );
 
   const installedModelIds = useMemo(
     () => new Set(installedModels.map((m) => m.modelId)),
@@ -76,6 +95,32 @@ export default function VoicesScreen() {
     );
   };
 
+  /**
+   * Speaks a short sample at the persona's own rate and pitch through the real engine path.
+   * Previewing never changes the stored preferences — only choosing a card does.
+   */
+  const handlePreviewPersona = async (persona: VoicePersona) => {
+    setPreviewingPersona(persona.id);
+    try {
+      const sampleLanguage = getLanguageByCode(preferences.language);
+      const options: SpeechOptions = {
+        language: preferences.language,
+        rate: persona.rate,
+        pitch: persona.pitch,
+      };
+      if (preferences.voiceId) {
+        options.voiceId = preferences.voiceId;
+      }
+      await getSpeechController().speak(sampleLanguage?.nativeName ?? 'SwarSathi', options);
+    } finally {
+      setPreviewingPersona(null);
+    }
+  };
+
+  const handleGenderSelect = (next: VoiceGender) => {
+    void setVoiceGender(next);
+  };
+
   const headingStyle = {
     color: theme.colors.text,
     fontSize: theme.fontSizes.title * theme.fontScale,
@@ -100,6 +145,132 @@ export default function VoicesScreen() {
         style={[styles.flex, { backgroundColor: theme.colors.background }]}
         contentContainerStyle={styles.content}
       >
+        {/* Voice persona — how the user wants to be heard */}
+        <View style={styles.section} testID="voice-personas">
+          <Text accessibilityRole="header" style={headingStyle}>
+            Voice persona
+          </Text>
+          <Text style={[mutedStyle, styles.hint]}>
+            Choose how you want to be heard. A persona sets a starting speed and pitch; you can
+            still change both in Settings. Preview speaks a sample without selecting.
+          </Text>
+
+          {VOICE_PERSONAS.map((persona) => {
+            const selected = activePersona?.id === persona.id;
+            const previewing = previewingPersona === persona.id;
+            return (
+              <View
+                key={persona.id}
+                style={[
+                  styles.personaRow,
+                  {
+                    borderColor: selected ? theme.colors.primary : theme.colors.border,
+                    borderWidth: selected ? 2 : 1,
+                    backgroundColor: theme.colors.surface,
+                  },
+                ]}
+              >
+                <Pressable
+                  testID={`persona-${persona.id}`}
+                  onPress={() => void setPersona(selected ? null : persona.id)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${persona.label} voice. ${persona.description} ${
+                    selected ? 'Selected.' : 'Not selected.'
+                  }`}
+                  accessibilityState={{ selected }}
+                  style={({ pressed }) => [
+                    styles.personaCard,
+                    pressed && { opacity: 0.85 },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      bodyStyle,
+                      { fontWeight: '800', color: selected ? theme.colors.primary : theme.colors.text },
+                    ]}
+                  >
+                    {persona.label}
+                    {selected ? ' ✓' : ''}
+                  </Text>
+                  <Text style={mutedStyle}>{persona.description}</Text>
+                  <Text style={[mutedStyle, { marginTop: 2 }]}>{persona.recommendedFor}</Text>
+                </Pressable>
+                <Pressable
+                  testID={`persona-preview-${persona.id}`}
+                  onPress={() => void handlePreviewPersona(persona)}
+                  disabled={previewing}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Preview ${persona.label} voice`}
+                  accessibilityState={{ disabled: previewing, busy: previewing }}
+                  style={({ pressed }) => [
+                    styles.personaPreview,
+                    {
+                      borderColor: theme.colors.border,
+                      backgroundColor: pressed ? theme.colors.surfaceMuted : theme.colors.surface,
+                      minHeight: theme.minTouchTarget,
+                    },
+                  ]}
+                >
+                  {previewing ? (
+                    <ActivityIndicator size="small" color={theme.colors.primary} />
+                  ) : (
+                    <Text style={[bodyStyle, { fontWeight: '700' }]}>Preview</Text>
+                  )}
+                </Pressable>
+              </View>
+            );
+          })}
+
+          <Text style={[bodyStyle, { fontWeight: '700', marginTop: theme.spacing.md }]}>
+            Voice gender preference
+          </Text>
+          <View style={styles.genderRow}>
+            {(['any', 'male', 'female'] as VoiceGender[]).map((option) => {
+              const optionLabel =
+                option === 'any' ? 'Any' : option === 'male' ? 'Male' : 'Female';
+              const isSelected = gender === option;
+              return (
+                <Pressable
+                  key={option}
+                  testID={`voice-gender-${option}`}
+                  onPress={() => handleGenderSelect(option)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${optionLabel} voice`}
+                  accessibilityState={{ selected: isSelected }}
+                  style={({ pressed }) => [
+                    styles.genderChip,
+                    {
+                      borderColor: isSelected ? theme.colors.primary : theme.colors.border,
+                      borderWidth: isSelected ? 2 : 1,
+                      backgroundColor: isSelected
+                        ? theme.colors.surfaceMuted
+                        : theme.colors.surface,
+                      minHeight: theme.minTouchTarget,
+                    },
+                    pressed && { opacity: 0.85 },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      bodyStyle,
+                      { fontWeight: '700', color: isSelected ? theme.colors.primary : theme.colors.text },
+                    ]}
+                  >
+                    {optionLabel}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <Text style={[mutedStyle, styles.hint]}>
+            {gender === 'any'
+              ? 'The speech engine picks the voice automatically.'
+              : genderMatchedVoice
+                ? `Matched voice: ${genderMatchedVoice.name}.`
+                : 'No installed voice on this phone states its gender in its name, so the automatic voice is kept. Gender is only applied where a voice advertises it — SwarSathi never guesses.'}
+          </Text>
+        </View>
+
         {/* Storage Summary */}
         <View style={styles.card}>
           <Text accessibilityRole="header" style={headingStyle}>
@@ -415,6 +586,36 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     borderWidth: 1,
     paddingHorizontal: 16,
+  },
+  personaRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    borderRadius: 10,
+    marginTop: 10,
+    overflow: 'hidden',
+  },
+  personaCard: {
+    flex: 1,
+    padding: 12,
+    justifyContent: 'center',
+  },
+  personaPreview: {
+    width: 88,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderLeftWidth: StyleSheet.hairlineWidth,
+  },
+  genderRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+  },
+  genderChip: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    paddingHorizontal: 8,
   },
   attributionBox: {
     marginTop: 10,

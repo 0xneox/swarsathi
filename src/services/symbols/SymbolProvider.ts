@@ -187,9 +187,10 @@ export function customSymbolToEntry(symbol: CustomSymbol): SymbolEntry {
  * repository to read, so a caller that has none gets an empty list rather than an empty promise.
  */
 export function createSymbolProviders(
-  customRepository: CustomSymbolRepository | null
+  customRepository: CustomSymbolRepository | null,
+  packProviders: SymbolProvider[] = []
 ): SymbolProvider[] {
-  const providers: SymbolProvider[] = [new StarterSymbolProvider()];
+  const providers: SymbolProvider[] = [new StarterSymbolProvider(), ...packProviders];
   if (customRepository) {
     providers.push(new CustomSymbolProvider(customRepository));
   }

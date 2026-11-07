@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons, FontAwesome5, MaterialCommunityIcons } from '@expo/vector-icons';
+import { PlayIconButton } from './PlayIconButton';
 import { useTheme } from '../providers/ThemeProvider';
 
 export interface PhraseCardProps {
@@ -204,41 +206,52 @@ export function PhraseCard({
           </View>
         </View>
 
-        {title ? (
-          <Text
-            style={{
-              color: theme.colors.text,
-              fontSize: theme.fontSizes.label * theme.fontScale,
-              fontWeight: '800',
-              marginTop: theme.spacing.xs,
-            }}
-          >
-            {title}
-          </Text>
-        ) : null}
+        <View style={styles.contentRow}>
+          <View style={styles.iconWrap}>
+            <PhraseIconBadge text={text} category={categoryLabel} />
+          </View>
+          <View style={styles.textContainer}>
+            {title ? (
+              <Text
+                style={{
+                  color: theme.colors.text,
+                  fontSize: theme.fontSizes.label * theme.fontScale,
+                  fontWeight: '800',
+                  marginTop: theme.spacing.xs,
+                }}
+              >
+                {title}
+              </Text>
+            ) : null}
 
-        <Text
-          style={{
-            color: theme.colors.text,
-            fontSize: (compact ? theme.fontSizes.body : theme.fontSizes.title) * theme.fontScale,
-            fontWeight: '600',
-            marginTop: theme.spacing.xs,
-          }}
-        >
-          {text}
-        </Text>
+            <Text
+              style={{
+                color: theme.colors.text,
+                fontSize: (compact ? theme.fontSizes.body : 17) * theme.fontScale,
+                fontWeight: '600',
+                marginTop: theme.spacing.xs,
+              }}
+            >
+              {text}
+            </Text>
 
-        {languageLabel ? (
-          <Text
-            style={{
-              color: theme.colors.textMuted,
-              fontSize: theme.fontSizes.caption * theme.fontScale,
-              marginTop: theme.spacing.xs,
-            }}
-          >
-            {`Spoken in ${languageLabel}`}
-          </Text>
-        ) : null}
+            {languageLabel ? (
+              <Text
+                style={{
+                  color: theme.colors.textMuted,
+                  fontSize: theme.fontSizes.caption * theme.fontScale,
+                  marginTop: theme.spacing.xs,
+                }}
+              >
+                {`Spoken in ${languageLabel}`}
+              </Text>
+            ) : null}
+          </View>
+
+          <View style={styles.playButtonWrap}>
+            <PlayIconButton onPress={onPress} size={30} />
+          </View>
+        </View>
       </Pressable>
 
       {hasActions ? (
@@ -374,11 +387,82 @@ function CardAction({
   );
 }
 
+function PhraseIconBadge({ text, category }: { text: string; category: string }) {
+  const lower = (text + ' ' + category).toLowerCase();
+  let name = 'chatbubble-outline';
+  let color = '#059669';
+  let type: 'ion' | 'fa5' | 'mci' = 'ion';
+
+  if (lower.includes('water') || lower.includes('drink')) {
+    name = 'water';
+    color = '#0284C7';
+    type = 'ion';
+  } else if (lower.includes('hungry') || lower.includes('food') || lower.includes('eat')) {
+    name = 'utensils';
+    color = '#D97706';
+    type = 'fa5';
+  } else if (lower.includes('rest') || lower.includes('sleep') || lower.includes('bed')) {
+    name = 'bed';
+    color = '#7C3AED';
+    type = 'fa5';
+  } else if (lower.includes('bathroom') || lower.includes('toilet')) {
+    name = 'restroom';
+    color = '#0891B2';
+    type = 'fa5';
+  } else if (lower.includes('pain') || lower.includes('doctor') || lower.includes('health') || lower.includes('medicine')) {
+    name = 'heart-pulse';
+    color = '#E11D48';
+    type = 'mci';
+  } else if (lower.includes('help') || lower.includes('emergency')) {
+    name = 'alert-circle';
+    color = '#DC2626';
+    type = 'ion';
+  } else if (lower.includes('yes')) {
+    name = 'thumbs-up';
+    color = '#16A34A';
+    type = 'fa5';
+  } else if (lower.includes('no')) {
+    name = 'thumbs-down';
+    color = '#DC2626';
+    type = 'fa5';
+  }
+
+  if (type === 'fa5') {
+    return <FontAwesome5 name={name as any} size={18} color={color} />;
+  }
+  if (type === 'mci') {
+    return <MaterialCommunityIcons name={name as any} size={20} color={color} />;
+  }
+  return <Ionicons name={name as any} size={20} color={color} />;
+}
+
 const styles = StyleSheet.create({
   card: {
     overflow: 'hidden',
   },
   body: {
+    justifyContent: 'center',
+  },
+  contentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 6,
+  },
+  iconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+    backgroundColor: '#F8FAFC',
+  },
+  textContainer: {
+    flex: 1,
+    marginRight: 10,
+  },
+  playButtonWrap: {
+    alignItems: 'center',
     justifyContent: 'center',
   },
   captionRow: {

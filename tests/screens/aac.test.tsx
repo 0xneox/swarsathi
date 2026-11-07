@@ -29,17 +29,21 @@ jest.mock('../../src/services/symbols/customSymbolImages', () => ({
 
 import AacScreen from '../../src/app/aac';
 import { STARTER_SYMBOL_ENTRIES, SYMBOL_CATEGORIES } from '../../src/data/symbols';
+import { SpeechController } from '../../src/services/speech/SpeechController';
 import { InMemoryCustomSymbolRepository } from '../../src/services/storage/customSymbols';
 import { InMemorySavedMessageRepository } from '../../src/services/storage/database';
 import { InMemoryPreferencesRepository } from '../../src/services/storage/preferences';
 import { DEFAULT_PROFILE_ID, setActiveProfileId } from '../../src/services/storage/profileScope';
 import { CUSTOM_PROVIDER_ID } from '../../src/services/symbols/SymbolProvider';
 import {
+  getSpeechController,
   setCustomSymbolStorageForTesting,
+  setSpeechControllerForTesting,
   setStorageRepositoriesForTesting,
   useAppStore,
 } from '../../src/store/appStore';
 import { DEFAULT_PREFERENCES } from '../../src/types';
+import { MockSpeechEngine } from '../speech/MockSpeechEngine';
 
 /**
  * The AAC board, regression-tested after the Sprint C refactor.
@@ -56,27 +60,36 @@ function resetStore(): void {
     composeDraft: null,
     symbolEntries: STARTER_SYMBOL_ENTRIES,
     symbolCategories: SYMBOL_CATEGORIES,
+    speech: getSpeechController().getState(),
     activeProfileId: DEFAULT_PROFILE_ID,
     bootstrapStatus: 'ready',
     storageAvailable: true,
   });
 }
 
-beforeEach(() => {
+let engine: MockSpeechEngine;
+
+beforeEach(async () => {
   mockRouterPush.mockClear();
   mockPickImage.mockReset();
   mockDeleteImage.mockClear();
 
+  // The board now speaks the sentence on every tap, so the engine is a controllable mock rather
+  // than the real one, which would silently refuse to speak in this environment.
+  engine = new MockSpeechEngine();
+  setSpeechControllerForTesting(new SpeechController(engine));
   setStorageRepositoriesForTesting(
     new InMemorySavedMessageRepository(),
     new InMemoryPreferencesRepository()
   );
   setCustomSymbolStorageForTesting(new InMemoryCustomSymbolRepository());
   resetStore();
+  await getSpeechController().initialize();
 });
 
 afterEach(() => {
   jest.restoreAllMocks();
+  setSpeechControllerForTesting(null);
   setStorageRepositoriesForTesting(null, null);
   setCustomSymbolStorageForTesting(null);
 });
@@ -261,5 +274,75 @@ describe('AAC board message actions', () => {
     await fireEvent.press(screen.getByTestId('aac-open-compose'));
 
     expect(mockRouterPush).toHaveBeenCalledWith('/compose');
+  });
+});
+
+describe('AAC core-word sentence building', () => {
+  it('speaks the whole sentence each time a picture is added, not the lone word', async () => {
+    await render(<AacScreen />);
+
+    await fireEvent.press(screen.getByTestId('symbol-sym-water'));
+    await waitFor(() => expect(engine.lastUtterance?.text).toBe('water'));
+
+    await fireEvent.press(screen.getByTestId('symbol-sym-food'));
+
+    await waitFor(() => expect(engine.lastUtterance?.text).toBe('water food'));
+  });
+
+  it('shows the tapped pictures in the order they were tapped', async () => {
+    await render(<AacScreen />);
+
+    await fireEvent.press(screen.getByTestId('symbol-sym-water'));
+    await fireEvent.press(screen.getByTestId('symbol-sym-food'));
+
+    // The chip also shows the glyph and its remove control, so the word is matched inside it.
+    expect(screen.getByTestId('aac-strip-chip-0')).toHaveTextContent(/water/);
+    expect(screen.getByTestId('aac-strip-chip-1')).toHaveTextContent(/food/);
+  });
+
+  it('starts with an empty strip', async () => {
+    await render(<AacScreen />);
+
+    expect(screen.getByTestId('aac-sentence-strip-empty')).toBeTruthy();
+    expect(screen.queryByTestId('aac-strip-chip-0')).toBeNull();
+  });
+
+  it('removes one word without clearing the words after it', async () => {
+    await render(<AacScreen />);
+
+    await fireEvent.press(screen.getByTestId('symbol-sym-water'));
+    await fireEvent.press(screen.getByTestId('symbol-sym-food'));
+
+    await fireEvent.press(screen.getByTestId('aac-strip-remove-0'));
+
+    const draft = useAppStore.getState().composeDraft;
+    expect(draft?.segments).toHaveLength(1);
+    expect(draft?.segments[0]).toMatchObject({ origin: { refId: 'sym-food' } });
+    expect(screen.queryByTestId('aac-strip-chip-1')).toBeNull();
+  });
+});
+
+describe('AAC English fallback on tiles', () => {
+  it('marks a picture whose word exists only in English', async () => {
+    const repository = new InMemoryCustomSymbolRepository();
+    await repository.save({
+      id: 'sym-photo-en',
+      profileId: DEFAULT_PROFILE_ID,
+      label: 'Grandma',
+      language: 'en-IN',
+      imageUri: 'file:///documents/custom-symbols/grandma.jpg',
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    setCustomSymbolStorageForTesting(repository);
+    useAppStore.setState({ preferences: { ...DEFAULT_PREFERENCES, language: 'ml-IN' } });
+    await useAppStore.getState().loadSymbols();
+
+    await render(<AacScreen />);
+
+    // Malayalam is active but this picture has no Malayalam word, so the tile says so.
+    expect(screen.getByTestId('symbol-fallback-sym-photo-en')).toBeTruthy();
+    // A bundled symbol, which carries Malayalam, is not marked.
+    expect(screen.queryByTestId('symbol-fallback-sym-water')).toBeNull();
   });
 });

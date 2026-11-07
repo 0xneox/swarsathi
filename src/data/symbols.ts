@@ -18,6 +18,12 @@ import { detectScript } from './messages';
  * to be set to. Translations are drafts pending native review, same status as the bundled phrase
  * library; a missing translation falls back to English rather than producing an empty segment,
  * and uncertain translations were deliberately left out rather than guessed.
+ *
+ * Every symbol carries all six languages SwarSathi speaks, and every glyph means exactly one thing.
+ * Two tiles sharing a picture — a thumbs-up that is both "yes" and "I like", a SOS that is both
+ * "help" and "I need" — force the person tapping and the person reading to guess from context, which
+ * is precisely what a picture board must never do. Where two meanings once shared a glyph, one of
+ * them now has its own; a repeated glyph is a bug, not a style choice.
  */
 
 /** Id of the provider that serves this bundled set. */
@@ -148,9 +154,11 @@ const WORDS = {
   },
   bathroom: {
     'en-IN': 'bathroom',
+    'ml-IN': 'കക്കൂസ്',
     'hi-IN': 'शौचालय',
     'ta-IN': 'கழிப்பறை',
     'te-IN': 'టాయిలెట్',
+    'kn-IN': 'ಶೌಚಾಲಯ',
   },
   pain: {
     'en-IN': 'pain',
@@ -178,13 +186,15 @@ const WORDS = {
   },
   hospital: {
     'en-IN': 'hospital',
+    'ml-IN': 'ആശുപത്രി',
     'hi-IN': 'अस्पताल',
     'ta-IN': 'மருத்துவமனை',
     'te-IN': 'ఆసుపత్రి',
-    'kn-IN': 'ಆಸತಿ',
+    'kn-IN': 'ಆಸ್ಪತ್ರೆ',
   },
   ambulance: {
     'en-IN': 'ambulance',
+    'ml-IN': 'ആംബുലൻസ്',
     'hi-IN': 'एम्बुलेंस',
     'ta-IN': 'ஆம்புலன்ஸ்',
     'te-IN': 'అంబులెన్స్',
@@ -232,6 +242,7 @@ const WORDS = {
   },
   home: {
     'en-IN': 'home',
+    'ml-IN': 'വീട്',
     'hi-IN': 'घर',
     'ta-IN': 'வீடு',
     'te-IN': 'ఇల్లు',
@@ -239,6 +250,7 @@ const WORDS = {
   },
   call: {
     'en-IN': 'call',
+    'ml-IN': 'വിളിക്കുക',
     'hi-IN': 'कॉल',
     'ta-IN': 'அழை',
     'te-IN': 'కాల్',
@@ -254,6 +266,7 @@ const WORDS = {
   },
   speak: {
     'en-IN': 'speak',
+    'ml-IN': 'സംസാരിക്കുക',
     'hi-IN': 'बोलो',
     'ta-IN': 'பேசு',
     'te-IN': 'మాట్లాడు',
@@ -269,6 +282,7 @@ const WORDS = {
   },
   understand: {
     'en-IN': 'understand',
+    'ml-IN': 'മനസ്സിലാക്കുക',
     'hi-IN': 'समझो',
     'ta-IN': 'புரி',
     'te-IN': 'అర్థం',
@@ -292,6 +306,7 @@ const WORDS = {
   },
   want: {
     'en-IN': 'I want',
+    'ml-IN': 'എനിക്ക് വേണം',
     'hi-IN': 'मुझे चाहिए',
     'ta-IN': 'எனக்கு வேண்டும்',
     'te-IN': 'నాకు కావాలి',
@@ -299,13 +314,15 @@ const WORDS = {
   },
   need: {
     'en-IN': 'I need',
+    'ml-IN': 'എനിക്ക് ആവശ്യമുണ്ട്',
     'hi-IN': 'मुझे ज़रूरत है',
     'ta-IN': 'எனக்கு தேவை',
     'te-IN': 'నాకు అవసరం',
-    'kn-IN': 'ನನಗೆ ಬೇಕು',
+    'kn-IN': 'ನನಗೆ ಅಗತ್ಯವಿದೆ',
   },
   like: {
     'en-IN': 'I like',
+    'ml-IN': 'എനിക്ക് ഇഷ്ടമാണ്',
     'hi-IN': 'मुझे पसंद है',
     'ta-IN': 'எனக்கு பிடிக்கும்',
     'te-IN': 'నాకు ఇష్టం',
@@ -313,6 +330,7 @@ const WORDS = {
   },
   good: {
     'en-IN': 'good',
+    'ml-IN': 'നല്ലത്',
     'hi-IN': 'अच्छा',
     'ta-IN': 'நல்லது',
     'te-IN': 'మంచిది',
@@ -320,6 +338,7 @@ const WORDS = {
   },
   bad: {
     'en-IN': 'bad',
+    'ml-IN': 'ചീത്ത',
     'hi-IN': 'बुरा',
     'ta-IN': 'மோசம்',
     'te-IN': 'చెడ్డిది',
@@ -327,60 +346,83 @@ const WORDS = {
   },
   happy: {
     'en-IN': 'happy',
+    'ml-IN': 'സന്തോഷം',
     'hi-IN': 'खुश',
     'ta-IN': 'மகிழ்ச்சி',
     'te-IN': 'ఆనందం',
+    'kn-IN': 'ಸಂತೋಷ',
   },
   sad: {
     'en-IN': 'sad',
+    'ml-IN': 'സങ്കടം',
     'hi-IN': 'उदास',
     'ta-IN': 'சோகம',
+    'te-IN': 'బాధ',
+    'kn-IN': 'ದುಃಖ',
   },
   tired: {
     'en-IN': 'tired',
+    'ml-IN': 'ക്ഷീണം',
     'hi-IN': 'थका',
     'ta-IN': 'சோர்வாக',
+    'te-IN': 'అలసట',
+    'kn-IN': 'ಆಯಾಸ',
   },
   sleep: {
     'en-IN': 'sleep',
+    'ml-IN': 'ഉറക്കം',
     'hi-IN': 'नींद',
     'ta-IN': 'தூக்கம்',
     'te-IN': 'నిద్ర',
+    'kn-IN': 'ನಿದ್ದೆ',
   },
   wait: {
     'en-IN': 'wait',
+    'ml-IN': 'കാത്തിരിക്കുക',
     'hi-IN': 'इंतज़ार',
     'ta-IN': 'காத்திரு',
+    'te-IN': 'వేచి ఉండు',
+    'kn-IN': 'ಕಾಯು',
   },
   now: {
     'en-IN': 'now',
+    'ml-IN': 'ഇപ്പോൾ',
     'hi-IN': 'अभी',
     'ta-IN': 'இப்போது',
     'te-IN': 'ఇప్పుడు',
+    'kn-IN': 'ಈಗ',
   },
   later: {
     'en-IN': 'later',
+    'ml-IN': 'പിന്നീട്',
     'hi-IN': 'बाद में',
     'ta-IN': 'பிறகு',
     'te-IN': 'తర్వాత',
+    'kn-IN': 'ಆಮೇಲೆ',
   },
   stop: {
     'en-IN': 'stop',
+    'ml-IN': 'നിർത്തുക',
     'hi-IN': 'रुको',
     'ta-IN': 'நிறுத்து',
     'te-IN': 'ఆపు',
+    'kn-IN': 'ನಿಲ್ಲಿಸು',
   },
   yesPlease: {
     'en-IN': 'yes please',
+    'ml-IN': 'അതെ, ദയവായി',
     'hi-IN': 'हाँ, कृपया',
     'ta-IN': 'ஆம், தயவுசெய்து',
     'te-IN': 'అవును, దయచేసి',
+    'kn-IN': 'ಹೌದು, ದಯವಿಟ್ಟು',
   },
   noThankYou: {
     'en-IN': 'no thank you',
+    'ml-IN': 'വേണ്ട, നന്ദി',
     'hi-IN': 'नहीं, धन्यवाद',
     'ta-IN': 'இல்லை நன்றி',
     'te-IN': 'కాదు, ధన్యవాదాలు',
+    'kn-IN': 'ಬೇಡ, ಧನ್ಯವಾದ',
   },
 } as const;
 
@@ -424,14 +466,14 @@ export const STARTER_SYMBOLS: StarterSymbol[] = [
   symbol('sym-go', '🚶', 'actions', 'go'),
   symbol('sym-come', '👉', 'actions', 'come'),
   symbol('sym-want', '❤️', 'feelings', 'want'),
-  symbol('sym-need', '🆘', 'needs', 'need'),
-  symbol('sym-like', '👍', 'feelings', 'like'),
+  symbol('sym-need', '🙋', 'needs', 'need'),
+  symbol('sym-like', '😍', 'feelings', 'like'),
   symbol('sym-good', '👌', 'feelings', 'good'),
-  symbol('sym-bad', '👎', 'feelings', 'bad'),
+  symbol('sym-bad', '😖', 'feelings', 'bad'),
   symbol('sym-happy', '😄', 'feelings', 'happy'),
   symbol('sym-sad', '😢', 'feelings', 'sad'),
   symbol('sym-tired', '😴', 'feelings', 'tired'),
-  symbol('sym-sleep', '😴', 'actions', 'sleep'),
+  symbol('sym-sleep', '🛌', 'actions', 'sleep'),
   symbol('sym-wait', '⏳', 'actions', 'wait'),
   symbol('sym-now', '⏰', 'actions', 'now'),
   symbol('sym-later', '🕐', 'actions', 'later'),
@@ -471,6 +513,18 @@ export function symbolText(symbol: StarterSymbol, language: string): string {
 /** The wording a generic symbol entry contributes in a given language. */
 export function symbolEntryText(entry: SymbolEntry, language: string): string {
   return entry.words[language] ?? entry.words['en-IN'] ?? '';
+}
+
+/**
+ * True when the symbol has no wording in `language`, so the board is showing the English fallback.
+ *
+ * The board marks these tiles rather than silently substituting English, so the person looking at
+ * the picture always knows which language the word about to be spoken is really in. The bundled set
+ * carries all six languages, so this is normally only true for a provider that cannot translate —
+ * a person's own photograph, or a pictogram pack with no Indic metadata.
+ */
+export function symbolEntryTranslationMissing(entry: SymbolEntry, language: string): boolean {
+  return entry.words[language] === undefined;
 }
 
 /**

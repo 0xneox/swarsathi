@@ -1,6 +1,7 @@
-import { Stack } from 'expo-router';
+import { router, Stack } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
 import { AccessibilityInfo, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FloatingActionButton } from '../components/FloatingActionButton';
 import { PhraseCard } from '../components/PhraseCard';
 import { PhraseEditorModal } from '../components/PhraseEditorModal';
 import { communicationKey } from '../data/communication';
@@ -379,6 +380,11 @@ export default function FavouritesScreen() {
         defaultCategory="general"
         onCancel={() => setEditing(null)}
         onSubmit={handleSubmit}
+      />
+      <FloatingActionButton
+        onPress={() => router.push('/compose')}
+        accessibilityLabel="Add phrase"
+        bottomOffset={24}
       />
     </View>
   );

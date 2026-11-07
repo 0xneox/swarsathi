@@ -1,0 +1,11 @@
+{
+  "name": "swar-sound",
+  "version": "0.1.0",
+  "description": "SwarSathi native Android on-device environmental sound classification bridge (YAMNet / TensorFlow Lite, Kotlin).",
+  "license": "Apache-2.0",
+  "private": true,
+  "main": "index.ts",
+  "peerDependencies": {
+    "expo": "*"
+  }
+}

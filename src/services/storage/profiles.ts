@@ -55,6 +55,8 @@ interface ProfileRow {
   highContrast: number | null;
   simplifiedMode: number | null;
   historyLimit: number | null;
+  personaId: string | null;
+  voiceGender: string | null;
 }
 
 const PROFILE_SELECT = `
@@ -73,7 +75,9 @@ const PROFILE_SELECT = `
          pf.fontScale AS fontScale,
          pf.highContrast AS highContrast,
          pf.simplifiedMode AS simplifiedMode,
-         pf.historyLimit AS historyLimit
+         pf.historyLimit AS historyLimit,
+         pf.personaId AS personaId,
+         pf.voiceGender AS voiceGender
     FROM communication_profiles p
     LEFT JOIN profile_preferences pf ON pf.profileId = p.id`;
 
@@ -96,6 +100,8 @@ function rowToProfile(row: ProfileRow): Profile {
         highContrast: row.highContrast === 1,
         simplifiedMode: row.simplifiedMode === 1,
         historyLimit: row.historyLimit ?? undefined,
+        personaId: (row.personaId ?? undefined) as UserPreferences['personaId'],
+        voiceGender: (row.voiceGender ?? undefined) as UserPreferences['voiceGender'],
       })
     : { ...DEFAULT_PREFERENCES };
 
@@ -159,8 +165,8 @@ export class SqliteProfileRepository implements ProfileRepository {
       );
       await database.runAsync(
         `INSERT INTO profile_preferences
-           (profileId, engineId, language, speechRate, pitch, voiceId, fontScale, highContrast, simplifiedMode, historyLimit)
-         VALUES ($profileId, $engineId, $language, $speechRate, $pitch, $voiceId, $fontScale, $highContrast, $simplifiedMode, $historyLimit)
+           (profileId, engineId, language, speechRate, pitch, voiceId, fontScale, highContrast, simplifiedMode, historyLimit, personaId, voiceGender)
+         VALUES ($profileId, $engineId, $language, $speechRate, $pitch, $voiceId, $fontScale, $highContrast, $simplifiedMode, $historyLimit, $personaId, $voiceGender)
          ON CONFLICT(profileId) DO UPDATE SET
            engineId = excluded.engineId,
            language = excluded.language,
@@ -170,7 +176,9 @@ export class SqliteProfileRepository implements ProfileRepository {
            fontScale = excluded.fontScale,
            highContrast = excluded.highContrast,
            simplifiedMode = excluded.simplifiedMode,
-           historyLimit = excluded.historyLimit`,
+           historyLimit = excluded.historyLimit,
+           personaId = excluded.personaId,
+           voiceGender = excluded.voiceGender`,
         {
           $profileId: profile.id,
           $engineId: preferences.engineId,
@@ -182,6 +190,8 @@ export class SqliteProfileRepository implements ProfileRepository {
           $highContrast: preferences.highContrast ? 1 : 0,
           $simplifiedMode: preferences.simplifiedMode ? 1 : 0,
           $historyLimit: preferences.historyLimit,
+          $personaId: preferences.personaId ?? null,
+          $voiceGender: preferences.voiceGender ?? null,
         }
       );
     });

@@ -1,0 +1,13 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!--
+    Sound awareness reads the microphone continuously while listening. RECORD_AUDIO is a runtime
+    permission: the JavaScript layer asks for it before `start()`, and listening refuses to begin
+    without it.
+  -->
+  <uses-permission android:name="android.permission.RECORD_AUDIO" />
+  <!--
+    Some devices route the mic through voice-communication processing; declaring the feature keeps
+    Play/device filtering honest without excluding normal phones.
+  -->
+  <uses-feature android:name="android.hardware.microphone" android:required="true" />
+</manifest>

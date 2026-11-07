@@ -225,3 +225,16 @@ across installed engines.
 Engine unification (Message model + store) → Compose surface → Speak renderer hardening +
 TTS capability matrix → AAC Board on starter symbols → outbound Connect (text + audio share).
 Everything else remains a seam.
+
+## 13. Sound awareness (Sprint 7, vision.md §2D)
+
+- On-device YAMNet classification via the `swar-sound` local Expo module (TensorFlow Lite,
+  16 kHz mic → 521 AudioSet classes → mapped to doorbell, knock, alarm, siren, dog bark,
+  crying baby, smoke alarm in `src/services/sounds/catalog.ts`).
+- `SoundDetectionEngine` adapter contract per vision.md §3; UI never touches the native module.
+- Alerts: per-sound visual style + vibration pattern, optional screen flash, quiet hours,
+  per-profile settings and SQLite event history (no audio retained).
+
+**Disclaimer (required):** Sound awareness is a best-effort aid, not a certified smoke alarm,
+medical alert, or emergency system. It can miss sounds and must never be presented as a
+replacement for working safety equipment. The same warning is shown in the app UI.

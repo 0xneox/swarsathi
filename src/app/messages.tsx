@@ -1,6 +1,8 @@
 import { Stack } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
 import { Alert, FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { AppBottomNav } from '../components/AppBottomNav';
+import { FloatingActionButton } from '../components/FloatingActionButton';
 import { PhraseCard } from '../components/PhraseCard';
 import { PhraseEditorModal } from '../components/PhraseEditorModal';
 import { SwipeableRow } from '../components/SwipeableRow';
@@ -604,6 +606,12 @@ export default function SavedMessagesScreen() {
         onCancel={closeEditor}
         onSubmit={handleSubmit}
       />
+      <FloatingActionButton
+        onPress={openCreate}
+        accessibilityLabel="Create new message"
+        bottomOffset={75}
+      />
+      <AppBottomNav activeTab="messages" />
     </View>
   );
 }

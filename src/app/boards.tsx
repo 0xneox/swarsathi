@@ -1,6 +1,7 @@
 import { Stack, router } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
-import { Alert, Dimensions, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Dimensions, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { AppBottomNav } from '../components/AppBottomNav';
 import { CaregiverGate } from '../components/CaregiverGate';
 import { MonogramTile } from '../components/MonogramTile';
 import { NamePromptModal } from '../components/NamePromptModal';
@@ -499,6 +500,14 @@ export default function BoardsScreen() {
           void handleRename(value);
         }}
       />
+      <View style={styles.mascotFooter} pointerEvents="none">
+        <Image
+          source={require('../../assets/mascot-dog.png')}
+          style={styles.mascotDogImg}
+          resizeMode="contain"
+        />
+      </View>
+      <AppBottomNav activeTab="boards" />
     </>
   );
 }
@@ -602,5 +611,19 @@ const styles = StyleSheet.create({
   searchRow: {
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  mascotFooter: {
+    position: 'absolute',
+    bottom: 60,
+    right: 16,
+    zIndex: 10,
+    width: 90,
+    height: 70,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mascotDogImg: {
+    width: 80,
+    height: 64,
   },
 });

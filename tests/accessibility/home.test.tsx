@@ -36,6 +36,23 @@ function defaultEnglishCards() {
   return buildHomeCards(defaultHomeCardConfigs(), 'en-IN');
 }
 
+/** Walks a rendered tree depth-first, collecting every testID in the order it appears on screen. */
+function collectTestIds(node: unknown, out: string[] = []): string[] {
+  if (Array.isArray(node)) {
+    node.forEach((child) => collectTestIds(child, out));
+    return out;
+  }
+  if (!node || typeof node !== 'object') {
+    return out;
+  }
+  const element = node as { props?: { testID?: unknown }; children?: unknown };
+  if (typeof element.props?.testID === 'string') {
+    out.push(element.props.testID);
+  }
+  collectTestIds(element.children, out);
+  return out;
+}
+
 let engine: MockSpeechEngine;
 
 beforeEach(async () => {
@@ -149,6 +166,22 @@ describe('Home screen', () => {
     expect(screen.getByTestId('open-emergency')).toBeTruthy();
     expect(screen.getByTestId('open-history-card')).toBeTruthy();
     expect(screen.getByTestId('open-home-cards')).toBeTruthy();
+  });
+
+  it('puts the text editor and Speak before every other destination, so a new thought needs no scrolling', async () => {
+    const view = await render(<HomeScreen />);
+
+    const order = collectTestIds(view.toJSON());
+    const editor = order.indexOf('message-editor');
+    const speak = order.indexOf('speak-button');
+
+    expect(editor).toBeGreaterThanOrEqual(0);
+    expect(speak).toBeGreaterThanOrEqual(0);
+    // The editor and the Speak button come first; the profiles, language and card surfaces follow.
+    expect(editor).toBeLessThan(order.indexOf('open-profiles'));
+    expect(editor).toBeLessThan(order.indexOf('language-selector'));
+    expect(speak).toBeLessThan(order.indexOf('comm-card-yes'));
+    expect(speak).toBeLessThan(order.indexOf('open-emergency'));
   });
 });
 
