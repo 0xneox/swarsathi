@@ -69,7 +69,7 @@ export class SqliteComposedMessageRepository implements ComposedMessageRepositor
         $text: text,
         $language: language,
         $createdAt: message.meta.createdAt,
-        $updatedAt: message.meta.updatedAt,
+        $updatedAt: message.meta.updatedAt ?? message.meta.createdAt,
       }
     );
   }
@@ -105,7 +105,10 @@ export class InMemoryComposedMessageRepository implements ComposedMessageReposit
 
   async list(limit = 200): Promise<Message[]> {
     return [...this.store().values()]
-      .sort((a, b) => b.meta.updatedAt - a.meta.updatedAt)
+      .sort(
+        (a, b) =>
+          (b.meta.updatedAt ?? b.meta.createdAt) - (a.meta.updatedAt ?? a.meta.createdAt)
+      )
       .slice(0, limit)
       .map((message) => JSON.parse(JSON.stringify(message)) as Message);
   }

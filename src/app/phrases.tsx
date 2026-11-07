@@ -1,8 +1,10 @@
-import { Stack } from 'expo-router';
+import { router, Stack } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AppBottomNav } from '../components/AppBottomNav';
 import { CategoryFilter, type CategorySelection } from '../components/CategoryFilter';
+import { FloatingActionButton } from '../components/FloatingActionButton';
 import { LanguageNotice } from '../components/LanguageNotice';
 import { LanguageSelector } from '../components/LanguageSelector';
 import { PhraseCard } from '../components/PhraseCard';
@@ -257,12 +259,18 @@ export default function QuickPhrasesScreen() {
           </Text>
         }
       />
+      <FloatingActionButton
+        onPress={() => router.push('/compose')}
+        accessibilityLabel="Add or compose new phrase"
+        bottomOffset={insets.bottom + 65}
+      />
       <Toast
         testID="favourite-toast"
         message={toast}
-        bottomOffset={insets.bottom + theme.spacing.lg}
+        bottomOffset={insets.bottom + theme.spacing.lg + 50}
         onHidden={() => setToast(null)}
       />
+      <AppBottomNav activeTab="phrases" />
     </View>
   );
 }

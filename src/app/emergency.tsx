@@ -10,6 +10,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { ActionButton } from '../components/ActionButton';
 import { CommunicationCard } from '../components/CommunicationCard';
 import { StopButton } from '../components/StopButton';
@@ -78,11 +79,48 @@ export default function EmergencyScreen() {
 
   return (
     <View style={[styles.flex, { backgroundColor: theme.colors.background }]}>
-      <Stack.Screen options={{ title: 'Emergency' }} />
+      <Stack.Screen
+        options={{
+          title: 'Emergency',
+          headerTintColor: '#DC2626',
+          headerTitleStyle: { fontWeight: '800' },
+        }}
+      />
       <ScrollView
         contentContainerStyle={[styles.content, { gap: theme.spacing.md }]}
         keyboardShouldPersistTaps="handled"
       >
+        {/* Emergency Communication Hero Banner */}
+        <View
+          style={[
+            styles.heroBanner,
+            {
+              backgroundColor: theme.mode === 'high-contrast' ? '#FFFFFF' : '#FFF1F2',
+              borderColor: theme.mode === 'high-contrast' ? '#000000' : '#FECDD3',
+            },
+          ]}
+        >
+          <View style={styles.heroIconCircle}>
+            <Ionicons name="warning" size={32} color="#DC2626" />
+          </View>
+          <Text
+            style={[
+              styles.heroTitle,
+              { color: theme.mode === 'high-contrast' ? '#000000' : '#BE123C' },
+            ]}
+          >
+            Emergency Communication
+          </Text>
+          <Text
+            style={[
+              styles.heroSubtitle,
+              { color: theme.mode === 'high-contrast' ? '#000000' : '#9F1239' },
+            ]}
+          >
+            Quick messages for urgent situations
+          </Text>
+        </View>
+
         <Text
           style={{
             color: theme.colors.textMuted,
@@ -245,6 +283,34 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+  },
+  heroBanner: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 18,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    borderWidth: 1,
+    marginBottom: 6,
+  },
+  heroIconCircle: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#FFE4E6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  heroTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    letterSpacing: -0.3,
+  },
+  heroSubtitle: {
+    fontSize: 13,
+    fontWeight: '500',
+    marginTop: 3,
   },
   backdrop: {
     flex: 1,

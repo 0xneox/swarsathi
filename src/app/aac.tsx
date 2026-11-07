@@ -13,13 +13,18 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ActionButton } from '../components/ActionButton';
 import { Toast } from '../components/Toast';
+import { ARASAAC_PACK_ID } from '../data/arasaac';
 import { findLanguageForTag } from '../data/languages';
 import { messageToPlainText } from '../data/messages';
-import { symbolEntrySegment, symbolEntryText } from '../data/symbols';
+import {
+  symbolEntrySegment,
+  symbolEntryText,
+  symbolEntryTranslationMissing,
+} from '../data/symbols';
 import { useTheme } from '../providers/ThemeProvider';
 import { CUSTOM_PROVIDER_ID } from '../services/symbols/SymbolProvider';
 import { useAppStore } from '../store/appStore';
-import type { SymbolEntry } from '../types';
+import type { MessageSegment, SymbolEntry } from '../types';
 
 type CategorySelection = string | 'all';
 
@@ -48,8 +53,11 @@ export default function AacScreen() {
   const addCustomSymbol = useAppStore((state) => state.addCustomSymbol);
   const removeCustomSymbol = useAppStore((state) => state.removeCustomSymbol);
   const appendComposeSegment = useAppStore((state) => state.appendComposeSegment);
+  const removeComposeSegmentAt = useAppStore((state) => state.removeComposeSegmentAt);
   const clearComposeDraft = useAppStore((state) => state.clearComposeDraft);
   const speakComposed = useAppStore((state) => state.speakComposed);
+  const symbolPacks = useAppStore((state) => state.symbolPacks);
+  const installArasaacPack = useAppStore((state) => state.installArasaacPack);
 
   const [category, setCategory] = useState<CategorySelection>('all');
   const [query, setQuery] = useState('');
@@ -89,14 +97,29 @@ export default function AacScreen() {
 
   const plainText = draft ? messageToPlainText(draft) : '';
 
+  // The strip shows the glyph the person tapped, so each segment is resolved back to the symbol it
+  // came from. A segment that is not a symbol (typed text, a phrase) simply has no glyph.
+  const symbolById = useMemo(() => {
+    const map = new Map<string, SymbolEntry>();
+    for (const entry of symbolEntries) {
+      map.set(entry.id, entry);
+    }
+    return map;
+  }, [symbolEntries]);
+
   const handleTap = useCallback(
     (entry: SymbolEntry) => {
       appendComposeSegment(symbolEntrySegment(entry, language), 'aac');
-      // Speaking the symbol as it is added is the fastest confirmation that the phone will say the
-      // word the person meant; it is a single symbol, so it is spoken on its own.
       setLastAdded(symbolEntryText(entry, language));
+      // Every tap says the whole sentence built so far, not the lone word just added. On a picture
+      // board the person is composing in order, so what they need to hear back is how the words read
+      // together — the sentence is the message, the tap was just the next word of it.
+      const updated = useAppStore.getState().composeDraft;
+      if (updated) {
+        void speakComposed(updated, 'aac');
+      }
     },
-    [appendComposeSegment, language]
+    [appendComposeSegment, language, speakComposed]
   );
 
   const handleAddPicture = useCallback(async () => {
@@ -142,6 +165,19 @@ export default function AacScreen() {
     [language, removeCustomSymbol]
   );
 
+  const [packInstall, setPackInstall] = useState<'idle' | 'working' | 'failed'>('idle');
+  const hasArasaacPack = symbolPacks.some((pack) => pack.packId === ARASAAC_PACK_ID);
+
+  const handleInstallPack = useCallback(() => {
+    setPackInstall('working');
+    void installArasaacPack().then((result) => {
+      setPackInstall(result === 'installed' ? 'idle' : 'failed');
+      if (result === 'installed') {
+        setToast('Picture library installed');
+      }
+    });
+  }, [installArasaacPack]);
+
   const activeLanguageName = findLanguageForTag(language)?.englishName ?? language;
 
   return (
@@ -157,8 +193,70 @@ export default function AacScreen() {
             fontSize: theme.fontSizes.caption * theme.fontScale,
           }}
         >
-          Tap a picture to add its word ({activeLanguageName}) to your message.
+          Tap a picture to add its word ({activeLanguageName}). The whole sentence is spoken back each
+          time.
         </Text>
+
+        <SentenceStrip
+          segments={draft?.segments ?? []}
+          symbolById={symbolById}
+          onRemove={removeComposeSegmentAt}
+          onClear={() => {
+            clearComposeDraft();
+            setLastAdded(null);
+          }}
+        />
+
+        {!hasArasaacPack ? (
+          <View
+            testID="aac-pack-card"
+            style={{
+              backgroundColor: theme.colors.surface,
+              borderColor: theme.colors.border,
+              borderWidth: theme.mode === 'high-contrast' ? 2 : 1,
+              borderRadius: theme.radius.lg,
+              padding: theme.spacing.md,
+              gap: theme.spacing.sm,
+            }}
+          >
+            <Text
+              style={{
+                color: theme.colors.text,
+                fontSize: theme.fontSizes.body * theme.fontScale,
+                fontWeight: '700',
+              }}
+            >
+              Get the ARASAAC picture library
+            </Text>
+            <Text
+              style={{
+                color: theme.colors.textMuted,
+                fontSize: theme.fontSizes.caption * theme.fontScale,
+              }}
+            >
+              Real pictograms for everyday words, downloaded once and kept on this phone. Needs a
+              connection for the first download only.
+            </Text>
+            <ActionButton
+              testID="aac-install-symbol-pack"
+              label={packInstall === 'working' ? 'Downloading pictures…' : 'Download pictures'}
+              hint="Fetches the ARASAAC pictogram set once; the board works offline afterwards."
+              disabled={packInstall === 'working'}
+              onPress={handleInstallPack}
+            />
+            {packInstall === 'failed' ? (
+              <Text
+                testID="aac-pack-error"
+                style={{
+                  color: theme.colors.danger,
+                  fontSize: theme.fontSizes.caption * theme.fontScale,
+                }}
+              >
+                The pictures could not be downloaded. Check the connection and try again.
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
 
         <View
           style={[
@@ -414,6 +512,10 @@ function SymbolTile({
   const theme = useTheme();
   const word = symbolEntryText(entry, language);
   const removable = onRemove !== undefined;
+  // A picture with no wording in the active language is showing its English fallback. Saying so on
+  // the tile keeps the board honest: the person can see the word is not in their own language before
+  // they tap it, instead of discovering it only when the phone speaks.
+  const fallback = symbolEntryTranslationMissing(entry, language);
 
   return (
     <Pressable
@@ -421,7 +523,9 @@ function SymbolTile({
       onPress={onPress}
       onLongPress={onRemove}
       accessibilityRole="button"
-      accessibilityLabel={`${word}. ${categoryLabel}.`}
+      accessibilityLabel={`${word}. ${categoryLabel}.${
+        fallback ? ' Shown in English; there is no word for this in your language.' : ''
+      }`}
       accessibilityHint={
         removable
           ? 'Adds this word to your message. Long press to remove this picture.'
@@ -474,7 +578,162 @@ function SymbolTile({
       >
         {word}
       </Text>
+      {fallback ? (
+        <Text
+          testID={`symbol-fallback-${entry.id}`}
+          style={{
+            color: theme.colors.textMuted,
+            fontSize: theme.fontSizes.caption * theme.fontScale,
+            fontStyle: 'italic',
+          }}
+        >
+          Shown in English
+        </Text>
+      ) : null}
     </Pressable>
+  );
+}
+
+/**
+ * The sentence being built, in the order the person built it.
+ *
+ * Every provider's pictures and any typed word land here as one ordered row, so the strip is the
+ * message — not a preview of it. A word that was added by mistake can be taken back out on its own,
+ * without clearing everything after it, and the strip is what the Speak button reads aloud.
+ */
+function SentenceStrip({
+  segments,
+  symbolById,
+  onRemove,
+  onClear,
+}: {
+  segments: MessageSegment[];
+  symbolById: Map<string, SymbolEntry>;
+  onRemove: (index: number) => void;
+  onClear: () => void;
+}) {
+  const theme = useTheme();
+
+  return (
+    <View
+      testID="aac-sentence-strip"
+      accessibilityLabel="Your sentence"
+      style={[
+        styles.strip,
+        {
+          backgroundColor: theme.colors.surface,
+          borderColor: theme.colors.border,
+          borderWidth: theme.mode === 'high-contrast' ? 2 : 1,
+          borderRadius: theme.radius.md,
+          padding: theme.spacing.sm,
+          gap: theme.spacing.sm,
+        },
+      ]}
+    >
+      {segments.length === 0 ? (
+        <Text
+          testID="aac-sentence-strip-empty"
+          style={{
+            color: theme.colors.textMuted,
+            fontSize: theme.fontSizes.body * theme.fontScale,
+            paddingVertical: theme.spacing.xs,
+          }}
+        >
+          Your sentence is empty. Tap pictures below.
+        </Text>
+      ) : (
+        <>
+          <View style={[styles.stripRow, { gap: theme.spacing.sm }]}>
+            {segments.map((segment, index) => (
+              <StripChip
+                // Two identical symbols can sit next to each other, so position is the identity.
+                key={`${segment.origin.refId ?? segment.text}-${index}`}
+                segment={segment}
+                index={index}
+                symbolById={symbolById}
+                onRemove={onRemove}
+              />
+            ))}
+          </View>
+          <Pressable
+            testID="aac-strip-clear"
+            onPress={onClear}
+            accessibilityRole="button"
+            accessibilityLabel="Clear the whole sentence"
+            style={{
+              alignSelf: 'flex-end',
+              minHeight: theme.minTouchTarget,
+              justifyContent: 'center',
+              paddingHorizontal: theme.spacing.md,
+            }}
+          >
+            <Text style={{ color: theme.colors.text, fontWeight: '800' }}>Clear</Text>
+          </Pressable>
+        </>
+      )}
+    </View>
+  );
+}
+
+/** One word in the sentence strip: the picture that was tapped and the way out again. */
+function StripChip({
+  segment,
+  index,
+  symbolById,
+  onRemove,
+}: {
+  segment: MessageSegment;
+  index: number;
+  symbolById: Map<string, SymbolEntry>;
+  onRemove: (index: number) => void;
+}) {
+  const theme = useTheme();
+  const entry = segment.origin.refId ? symbolById.get(segment.origin.refId) : undefined;
+  const glyph = entry?.representation.kind === 'emoji' ? entry.representation.glyph : null;
+
+  return (
+    <View
+      testID={`aac-strip-chip-${index}`}
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.spacing.xs,
+        paddingLeft: theme.spacing.sm,
+        backgroundColor: theme.colors.surfaceMuted,
+        borderRadius: theme.radius.pill,
+      }}
+    >
+      {glyph ? (
+        <Text style={{ fontSize: theme.fontSizes.body * theme.fontScale }}>{glyph}</Text>
+      ) : null}
+      <Text
+        numberOfLines={1}
+        style={{
+          maxWidth: 160,
+          color: theme.colors.text,
+          fontSize: theme.fontSizes.body * theme.fontScale,
+          fontWeight: '700',
+        }}
+      >
+        {segment.text}
+      </Text>
+      <Pressable
+        testID={`aac-strip-remove-${index}`}
+        onPress={() => onRemove(index)}
+        accessibilityRole="button"
+        accessibilityLabel={`Remove ${segment.text} from your sentence`}
+        style={{
+          minHeight: theme.minTouchTarget,
+          minWidth: theme.minTouchTarget,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <Text style={{ color: theme.colors.text, fontSize: theme.fontSizes.body * theme.fontScale }}>
+          {'\u00d7'}
+        </Text>
+      </Pressable>
+    </View>
   );
 }
 
@@ -533,6 +792,14 @@ const styles = StyleSheet.create({
   },
   searchRow: {
     flexDirection: 'row',
+    alignItems: 'center',
+  },
+  strip: {
+    width: '100%',
+  },
+  stripRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
   },
   chipRow: {

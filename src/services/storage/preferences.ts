@@ -1,4 +1,10 @@
-import { DEFAULT_PREFERENCES, type SpeechEngineId, type UserPreferences } from '../../types';
+import {
+  DEFAULT_PREFERENCES,
+  type SpeechEngineId,
+  type UserPreferences,
+  type VoiceGender,
+} from '../../types';
+import { getVoicePersona } from '../../data/personas';
 import { clampHistoryLimit } from '../../data/communication';
 import { logger } from '../../utils/logger';
 import { getDatabase } from './database';
@@ -28,6 +34,8 @@ interface PreferenceRow {
   highContrast: number;
   simplifiedMode: number | null;
   historyLimit: number | null;
+  personaId: string | null;
+  voiceGender: string | null;
 }
 
 /** Recognises a stored engine id, or `null` when the value is not one we ship. */
@@ -55,7 +63,14 @@ export function normalizePreferences(candidate: Partial<UserPreferences>): UserP
     highContrast: candidate.highContrast === true,
     simplifiedMode: candidate.simplifiedMode === true,
     historyLimit: clampHistoryLimit(candidate.historyLimit),
+    personaId: getVoicePersona(candidate.personaId)?.id ?? null,
+    voiceGender: toVoiceGender(candidate.voiceGender) ?? 'any',
   };
+}
+
+/** Recognises a stored gender preference, or `undefined` when the value is not one we ship. */
+function toVoiceGender(value: unknown): VoiceGender | undefined {
+  return value === 'male' || value === 'female' ? value : value === 'any' ? 'any' : undefined;
 }
 
 function clamp(value: unknown, min: number, max: number, fallback: number): number {
@@ -71,7 +86,7 @@ export class SqlitePreferencesRepository implements PreferencesRepository {
     try {
       const database = await getDatabase();
       const row = await database.getFirstAsync<PreferenceRow>(
-        `SELECT engineId, language, speechRate, pitch, voiceId, fontScale, highContrast, simplifiedMode, historyLimit
+        `SELECT engineId, language, speechRate, pitch, voiceId, fontScale, highContrast, simplifiedMode, historyLimit, personaId, voiceGender
            FROM profile_preferences WHERE profileId = $profileId`,
         { $profileId: getActiveProfileId() }
       );
@@ -88,6 +103,8 @@ export class SqlitePreferencesRepository implements PreferencesRepository {
         highContrast: row.highContrast === 1,
         simplifiedMode: row.simplifiedMode === 1,
         historyLimit: row.historyLimit ?? undefined,
+        personaId: (row.personaId ?? undefined) as UserPreferences['personaId'],
+        voiceGender: (row.voiceGender ?? undefined) as UserPreferences['voiceGender'],
       });
     } catch (error) {
       logger.warn(SCOPE, 'Could not read preferences; using defaults');
@@ -101,8 +118,8 @@ export class SqlitePreferencesRepository implements PreferencesRepository {
     const database = await getDatabase();
     await database.runAsync(
       `INSERT INTO profile_preferences
-         (profileId, engineId, language, speechRate, pitch, voiceId, fontScale, highContrast, simplifiedMode, historyLimit)
-       VALUES ($profileId, $engineId, $language, $speechRate, $pitch, $voiceId, $fontScale, $highContrast, $simplifiedMode, $historyLimit)
+         (profileId, engineId, language, speechRate, pitch, voiceId, fontScale, highContrast, simplifiedMode, historyLimit, personaId, voiceGender)
+       VALUES ($profileId, $engineId, $language, $speechRate, $pitch, $voiceId, $fontScale, $highContrast, $simplifiedMode, $historyLimit, $personaId, $voiceGender)
        ON CONFLICT(profileId) DO UPDATE SET
          engineId = excluded.engineId,
          language = excluded.language,
@@ -112,7 +129,9 @@ export class SqlitePreferencesRepository implements PreferencesRepository {
          fontScale = excluded.fontScale,
          highContrast = excluded.highContrast,
          simplifiedMode = excluded.simplifiedMode,
-         historyLimit = excluded.historyLimit`,
+         historyLimit = excluded.historyLimit,
+         personaId = excluded.personaId,
+         voiceGender = excluded.voiceGender`,
       {
         $profileId: getActiveProfileId(),
         $engineId: normalized.engineId,
@@ -124,6 +143,8 @@ export class SqlitePreferencesRepository implements PreferencesRepository {
         $highContrast: normalized.highContrast ? 1 : 0,
         $simplifiedMode: normalized.simplifiedMode ? 1 : 0,
         $historyLimit: normalized.historyLimit,
+        $personaId: normalized.personaId ?? null,
+        $voiceGender: normalized.voiceGender ?? null,
       }
     );
   }

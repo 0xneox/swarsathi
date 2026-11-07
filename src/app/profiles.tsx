@@ -1,6 +1,8 @@
-import { Stack } from 'expo-router';
+import { router, Stack } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { AppBottomNav } from '../components/AppBottomNav';
 import { CaregiverGate } from '../components/CaregiverGate';
 import { MonogramTile } from '../components/MonogramTile';
 import { NamePromptModal } from '../components/NamePromptModal';
@@ -91,6 +93,8 @@ export default function ProfilesScreen() {
     [deleteProfile]
   );
 
+  const activeProfile = profiles.find((p) => p.id === activeProfileId) ?? profiles[0];
+
   return (
     <>
       <Stack.Screen options={{ title: 'Profiles' }} />
@@ -100,6 +104,87 @@ export default function ProfilesScreen() {
           contentContainerStyle={[styles.content, { gap: theme.spacing.md }]}
           keyboardShouldPersistTaps="handled"
         >
+          {/* Active Profile Card from Mockup */}
+          <View
+            style={[
+              styles.avatarCard,
+              {
+                backgroundColor: theme.mode === 'high-contrast' ? '#FFFFFF' : '#FFFFFF',
+                borderColor: theme.mode === 'high-contrast' ? '#000000' : '#E2E8F0',
+              },
+            ]}
+          >
+            <View style={styles.avatarRow}>
+              <View style={styles.avatarImageCircle}>
+                <Image
+                  source={require('../../assets/avatar-gokul.png')}
+                  style={styles.avatarImage}
+                  resizeMode="cover"
+                />
+              </View>
+              <View style={styles.avatarInfo}>
+                <Text
+                  style={[
+                    styles.avatarName,
+                    { color: theme.mode === 'high-contrast' ? '#000000' : '#0F172A' },
+                  ]}
+                >
+                  {activeProfile?.name ?? 'Gokul'}
+                </Text>
+                <Text style={styles.avatarSubtitle}>
+                  {activeProfile?.isDefault ? 'Primary Profile' : 'Custom Profile'}
+                </Text>
+              </View>
+            </View>
+
+            {/* Quick Profile Links */}
+            <View style={styles.quickLinks}>
+              <Pressable
+                onPress={() => router.push('/settings')}
+                style={({ pressed }) => [styles.linkRow, pressed && styles.pressed]}
+              >
+                <View style={styles.linkLeft}>
+                  <Ionicons name="person-outline" size={18} color="#64748B" style={styles.linkIcon} />
+                  <Text style={styles.linkText}>My Details</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+              </Pressable>
+
+              <Pressable
+                onPress={() => router.push('/settings')}
+                style={({ pressed }) => [styles.linkRow, pressed && styles.pressed]}
+              >
+                <View style={styles.linkLeft}>
+                  <Ionicons name="volume-medium-outline" size={18} color="#64748B" style={styles.linkIcon} />
+                  <Text style={styles.linkText}>Communication Preferences</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+              </Pressable>
+
+              <Pressable
+                onPress={() => router.push('/voices')}
+                style={({ pressed }) => [styles.linkRow, pressed && styles.pressed]}
+              >
+                <View style={styles.linkLeft}>
+                  <Ionicons name="globe-outline" size={18} color="#64748B" style={styles.linkIcon} />
+                  <Text style={styles.linkText}>Language &amp; Voice</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+              </Pressable>
+
+              <Pressable
+                onPress={() => router.push('/settings')}
+                style={({ pressed }) => [styles.linkRow, pressed && styles.pressed]}
+              >
+                <View style={styles.linkLeft}>
+                  <Ionicons name="body-outline" size={18} color="#64748B" style={styles.linkIcon} />
+                  <Text style={styles.linkText}>Accessibility</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+              </Pressable>
+            </View>
+          </View>
+
           <Text
             style={{
               color: theme.colors.textMuted,
@@ -310,6 +395,7 @@ export default function ProfilesScreen() {
           void handleDescribe(value);
         }}
       />
+      <AppBottomNav activeTab="profile" />
     </>
   );
 }
@@ -411,5 +497,75 @@ const styles = StyleSheet.create({
   actions: {
     flexDirection: 'row',
     flexWrap: 'wrap',
+  },
+  avatarCard: {
+    borderRadius: 20,
+    borderWidth: 1,
+    padding: 16,
+    elevation: 3,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    marginBottom: 4,
+  },
+  avatarRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  avatarImageCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: '#10B981',
+    marginRight: 14,
+    backgroundColor: '#E0F2FE',
+  },
+  avatarImage: {
+    width: '100%',
+    height: '100%',
+  },
+  avatarInfo: {
+    justifyContent: 'center',
+  },
+  avatarName: {
+    fontSize: 20,
+    fontWeight: '800',
+    letterSpacing: -0.3,
+  },
+  avatarSubtitle: {
+    fontSize: 13,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  quickLinks: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#F1F5F9',
+    paddingTop: 8,
+  },
+  linkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    paddingHorizontal: 4,
+  },
+  linkLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  linkIcon: {
+    marginRight: 10,
+  },
+  linkText: {
+    fontSize: 14.5,
+    fontWeight: '600',
+    color: '#1E293B',
+  },
+  pressed: {
+    opacity: 0.6,
   },
 });

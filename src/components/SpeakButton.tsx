@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, Animated, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../providers/ThemeProvider';
 
 export interface SpeakButtonProps {
@@ -8,6 +10,9 @@ export interface SpeakButtonProps {
   disabled?: boolean;
   /** True while an utterance is in progress; the button then offers "Speak again". */
   speaking?: boolean;
+  /** Whether to show the dual-style layout with subtitle. Defaults to true. */
+  showSubtitle?: boolean;
+  minHeight?: number;
 }
 
 /** Gap between the beats of the "still talking" pulse, in milliseconds. */
@@ -15,24 +20,20 @@ const PULSE_INTERVAL_MS = 1040;
 
 /**
  * The primary action of the entire application.
- *
- * It is the largest control on screen, it never moves, and its accessibility label changes with
- * state so a screen-reader user knows whether this press will start or restart speech.
- *
- * The button also answers back visually: it dips under the finger, and while the phone is talking
- * it breathes with a slow pulse, so "did that work?" is settled before the status text is read.
- * Both motions are skipped when the device asks for reduced motion.
+ * Matches the green rounded card design from the SwarSathi design system.
  */
-export function SpeakButton({ onPress, disabled = false, speaking = false }: SpeakButtonProps) {
+export function SpeakButton({
+  onPress,
+  disabled = false,
+  speaking = false,
+  showSubtitle = true,
+  minHeight,
+}: SpeakButtonProps) {
   const theme = useTheme();
   const [focused, setFocused] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
-  // The animation value is created once and kept in state rather than a ref: it has to be read
-  // during render to drive the transform, and the linter (rightly) forbids touching a ref there.
   const [scale] = useState(() => new Animated.Value(1));
-  // Track previous speaking state to detect when speech completes
   const wasSpeakingRef = useRef(false);
-  // Celebration animation values
   const [celebrationOpacity] = useState(() => new Animated.Value(0));
   const [celebrationScale] = useState(() => new Animated.Value(0.5));
 
@@ -57,9 +58,6 @@ export function SpeakButton({ onPress, disabled = false, speaking = false }: Spe
     };
   }, []);
 
-  // While an utterance is playing the button breathes, so the screen itself says "still talking".
-  // The beat is a finite animation repeated on a timer rather than an endless `Animated.loop`,
-  // because a loop never settles and would keep the test renderer busy forever.
   useEffect(() => {
     if (!speaking || reduceMotion) {
       scale.setValue(1);
@@ -80,14 +78,11 @@ export function SpeakButton({ onPress, disabled = false, speaking = false }: Spe
     };
   }, [speaking, reduceMotion, scale]);
 
-  // Trigger celebration when speech completes (speaking goes from true to false)
   useEffect(() => {
     if (reduceMotion) {
       return;
     }
-    // Detect transition from speaking to not speaking
     if (wasSpeakingRef.current && !speaking) {
-      // Flash celebration: fade in scale and opacity, then fade out
       celebrationScale.setValue(0.5);
       celebrationOpacity.setValue(0);
       Animated.parallel([
@@ -115,9 +110,11 @@ export function SpeakButton({ onPress, disabled = false, speaking = false }: Spe
   }, [disabled, reduceMotion, speaking, scale]);
 
   const label = speaking ? 'Speak again' : 'Speak message';
+  const isHC = theme.mode === 'high-contrast';
+  const calculatedMinHeight = minHeight ?? Math.max(theme.minTouchTarget + 20, 68 * theme.fontScale);
 
   return (
-    <Animated.View style={{ transform: [{ scale }] }}>
+    <Animated.View style={{ transform: [{ scale }], width: '100%' }}>
       <Pressable
         testID="speak-button"
         onPress={onPress}
@@ -134,33 +131,60 @@ export function SpeakButton({ onPress, disabled = false, speaking = false }: Spe
         style={({ pressed }) => [
           styles.button,
           {
-            backgroundColor: disabled
-              ? theme.colors.surfaceMuted
-              : pressed
-                ? theme.colors.primaryPressed
-                : theme.colors.primary,
-            borderRadius: theme.radius.lg,
-            minHeight: Math.max(theme.minTouchTarget + 24, 72 * theme.fontScale),
-            paddingVertical: theme.spacing.lg,
-            paddingHorizontal: theme.spacing.xl,
+            borderRadius: theme.radius.lg + 4,
             borderColor: focused ? theme.colors.focusRing : 'transparent',
             borderWidth: focused ? 3 : 0,
+            opacity: disabled ? 0.6 : pressed ? 0.9 : 1,
           },
         ]}
       >
-        <Text
-          style={[
-            styles.label,
-            {
-              color: disabled ? theme.colors.textMuted : theme.colors.onPrimary,
-              fontSize: theme.fontSizes.title * theme.fontScale,
-            },
-          ]}
-          allowFontScaling
-        >
-          {speaking ? 'SPEAK AGAIN' : 'SPEAK'}
-        </Text>
+        {isHC ? (
+          <View
+            style={[
+              styles.contentRow,
+              {
+                backgroundColor: disabled ? '#CCCCCC' : theme.colors.primary,
+                minHeight: calculatedMinHeight,
+                paddingVertical: theme.spacing.md,
+                paddingHorizontal: theme.spacing.lg,
+                borderRadius: theme.radius.lg + 4,
+              },
+            ]}
+          >
+            <Ionicons name="volume-high" size={26} color="#FFFFFF" style={styles.icon} />
+            <View style={styles.textColumn}>
+              <Text style={[styles.mainLabelHC, { fontSize: theme.fontSizes.title * theme.fontScale }]}>
+                {speaking ? 'SPEAK AGAIN' : 'SPEAK'}
+              </Text>
+              {showSubtitle && <Text style={styles.subLabelHC}>Say it out loud</Text>}
+            </View>
+          </View>
+        ) : (
+          <LinearGradient
+            colors={disabled ? ['#94A3B8', '#64748B'] : ['#22C55E', '#15803D']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={[
+              styles.contentRow,
+              {
+                minHeight: calculatedMinHeight,
+                paddingVertical: theme.spacing.md,
+                paddingHorizontal: theme.spacing.lg,
+                borderRadius: theme.radius.lg + 4,
+              },
+            ]}
+          >
+            <Ionicons name="volume-high" size={28} color="#FFFFFF" style={styles.icon} />
+            <View style={styles.textColumn}>
+              <Text style={[styles.mainLabel, { fontSize: 17 * theme.fontScale }]}>
+                {speaking ? 'SPEAK AGAIN' : 'SPEAK'}
+              </Text>
+              {showSubtitle && <Text style={styles.subLabel}>Say it out loud</Text>}
+            </View>
+          </LinearGradient>
+        )}
       </Pressable>
+
       {!reduceMotion && (
         <Animated.View
           style={[
@@ -173,7 +197,7 @@ export function SpeakButton({ onPress, disabled = false, speaking = false }: Spe
           pointerEvents="none"
         >
           <View style={styles.checkmarkContainer}>
-            <View style={[styles.checkmark, { borderColor: theme.colors.onPrimary }]} />
+            <View style={[styles.checkmark, { borderColor: '#FFFFFF' }]} />
           </View>
         </Animated.View>
       )}
@@ -183,13 +207,47 @@ export function SpeakButton({ onPress, disabled = false, speaking = false }: Spe
 
 const styles = StyleSheet.create({
   button: {
+    width: '100%',
+    overflow: 'hidden',
+    elevation: 3,
+    shadowColor: '#16A34A',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+  },
+  contentRow: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     width: '100%',
   },
-  label: {
+  icon: {
+    marginRight: 10,
+  },
+  textColumn: {
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+  },
+  mainLabel: {
+    color: '#FFFFFF',
     fontWeight: '800',
-    letterSpacing: 1,
+    letterSpacing: 0.8,
+  },
+  subLabel: {
+    color: '#DCFCE7',
+    fontSize: 11,
+    fontWeight: '500',
+    marginTop: 1,
+  },
+  mainLabelHC: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    letterSpacing: 0.8,
+  },
+  subLabelHC: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    marginTop: 1,
   },
   celebrationOverlay: {
     position: 'absolute',
@@ -199,7 +257,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 12,
+    borderRadius: 16,
   },
   checkmarkContainer: {
     width: 48,

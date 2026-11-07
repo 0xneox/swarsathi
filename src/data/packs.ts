@@ -74,6 +74,7 @@ export function getPacksForLanguage(languageCode: string): PackDescriptor[] {
 export const PACKS_BY_KIND: Record<PackKind, PackDescriptor[]> = {
   voice: getPacksForKind('voice'),
   symbols: getPacksForKind('symbols'),
+  translation: getPacksForKind('translation'),
 };
 
 /** All catalogue packs that have no install record and are therefore available to download. */

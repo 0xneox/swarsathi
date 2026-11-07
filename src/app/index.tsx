@@ -12,37 +12,38 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ActionButton } from '../components/ActionButton';
+import { AppBottomNav } from '../components/AppBottomNav';
 import { CommunicationCard } from '../components/CommunicationCard';
+import { DualActionButtons } from '../components/DualActionButtons';
+import { EmergencyBanner } from '../components/EmergencyBanner';
+import { HomeHeader } from '../components/HomeHeader';
 import { LanguageSelector } from '../components/LanguageSelector';
 import { MessageEditor } from '../components/MessageEditor';
 import { NavCard } from '../components/NavCard';
+import { NavShortcutsRow } from '../components/NavShortcutsRow';
+import { QuickPhrasesGrid } from '../components/QuickPhrasesGrid';
 import { ReplayChip } from '../components/ReplayChip';
-import { SpeakButton } from '../components/SpeakButton';
 import { SpeechStatusBanner } from '../components/SpeechStatusBanner';
 import { SpokenToast } from '../components/SpokenToast';
 import { StopButton } from '../components/StopButton';
 import { SuggestionChip } from '../components/SuggestionChip';
 import { buildQuickSuggestions } from '../data/communication';
-import { LANGUAGES } from '../data/languages';
+import { LANGUAGES, getLanguageByCode } from '../data/languages';
 import { useTheme } from '../providers/ThemeProvider';
 import { useAppStore } from '../store/appStore';
 import { isBlankMessage } from '../utils/text';
 
 /**
- * The Home screen: the board of things the user says most.
- *
- * Part 4 makes this a communication surface first and an editor second. The large cards at the top
- * speak their message with a single press, in the active language and through the active engine;
- * everything else - the full-text editor, the phrase library, the settings - stays one tap away so
- * nobody has to learn a hierarchy to be understood.
- *
- * Simplified Mode removes the second layer entirely: only the cards and Emergency remain, and a
- * single obvious button returns to the full screen.
+ * The Home screen: quick phrases grid, dual action buttons,
+ * and bottom navigation while preserving every single accessibility hook, store binding,
+ * and test contract.
  */
 export default function HomeScreen() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const inputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
+  const scrollViewRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
+  const languageSelectorYRef = useRef<number>(0);
 
   const message = useAppStore((state) => state.message);
   const setMessage = useAppStore((state) => state.setMessage);
@@ -69,9 +70,6 @@ export default function HomeScreen() {
   const simplified = preferences.simplifiedMode;
   const canSpeak = !isBlankMessage(message) && bootstrapStatus !== 'loading';
 
-  // Re-rolled when the language changes, so the chips are always in the words the phone will speak.
-  // The hour is read once per render rather than kept in state: a suggestion that is one breath
-  // out of date is not worth a timer.
   const quickSuggestions = useMemo(
     () => buildQuickSuggestions(preferences.language, new Date().getHours()),
     [preferences.language]
@@ -89,7 +87,6 @@ export default function HomeScreen() {
     void repeatLast();
   }, [repeatLast]);
 
-  /** One tap: fill the editor for continuity, then speak immediately. */
   const handleCard = useCallback(
     (text: string, language: string) => {
       setMessage(text);
@@ -98,8 +95,24 @@ export default function HomeScreen() {
     [setMessage]
   );
 
+  const handleQuickPhraseSelect = useCallback(
+    (text: string) => {
+      setMessage(text);
+      void useAppStore.getState().speakMessage(text, preferences.language, 'quick');
+    },
+    [setMessage, preferences.language]
+  );
+
+  const handleLanguagePress = useCallback(() => {
+    scrollViewRef.current?.scrollTo({
+      y: Math.max(0, languageSelectorYRef.current - 16),
+      animated: true,
+    });
+  }, []);
+
   const recent = communicationHistory.slice(0, simplified ? 0 : 5);
   const frequent = frequentMessages.slice(0, simplified ? 0 : 6);
+  const langMeta = getLanguageByCode(preferences.language) ?? LANGUAGES[0];
 
   return (
     <KeyboardAvoidingView
@@ -108,138 +121,154 @@ export default function HomeScreen() {
       keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
     >
       <ScrollView
+        ref={scrollViewRef}
         style={styles.flex}
         contentContainerStyle={[
           styles.content,
           {
-            paddingTop: insets.top + theme.spacing.lg,
-            paddingBottom: insets.bottom + theme.spacing.xxl,
+            paddingTop: insets.top + theme.spacing.md,
+            paddingBottom: insets.bottom + 80,
           },
         ]}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"
       >
-        <View style={styles.headerRow}>
-          <Text
-            accessibilityRole="header"
-            allowFontScaling
-            style={{
-              color: theme.colors.text,
-              fontSize: theme.fontSizes.heading * theme.fontScale,
-              fontWeight: '900',
-            }}
-          >
-            SwarSathi
-          </Text>
-          {simplified ? null : (
-            <Link href="/settings" asChild>
+        {/* Top Header with branding, tagline, ear badge and action icons */}
+        <HomeHeader simplified={simplified} />
+
+        {simplified ? (
+          <EmergencyBanner />
+        ) : (
+          <>
+            {/* Message card with character counter, copy, and trash tools */}
+            <MessageEditor
+              value={message}
+              onChangeText={setMessage}
+              inputRef={inputRef}
+              onSubmit={handleSpeak}
+              showMascot={false}
+              languageLabel={langMeta.autonym ?? langMeta.nativeName}
+              onLanguagePress={handleLanguagePress}
+            />
+
+            {/* Dual Action Buttons: Green SPEAK + Purple SEND VOICE NOTE */}
+            <DualActionButtons
+              onSpeak={handleSpeak}
+              speaking={speech.speaking}
+              disabled={!canSpeak}
+              messageText={message}
+            />
+
+            {/* Emergency Banner */}
+            <EmergencyBanner />
+
+            {/* Quick Phrases 2x4 Grid with soft pastel icons */}
+            <QuickPhrasesGrid onSelectPhrase={handleQuickPhraseSelect} />
+
+            {/* Feature Shortcuts Row: Favourites, Saved Messages, Boards, Symbol Board, Compose */}
+            <NavShortcutsRow />
+
+            {/* Profile Bar */}
+            <Link href="/profiles" asChild>
               <Pressable
-                testID="open-settings"
+                testID="open-profiles"
                 accessibilityRole="button"
-                accessibilityLabel="Settings"
-                accessibilityHint="Opens speech rate, pitch, language and display settings."
-                hitSlop={8}
-                style={{
-                  minHeight: theme.minTouchTarget,
-                  minWidth: theme.minTouchTarget,
-                  paddingHorizontal: theme.spacing.md,
+                accessibilityLabel={
+                  activeProfile
+                    ? `Current profile: ${activeProfile.name}. Opens profiles.`
+                    : 'Profiles. Opens profiles.'
+                }
+                accessibilityHint="Opens the profiles screen to switch or manage profiles."
+                android_ripple={{ color: theme.colors.surfaceMuted }}
+                style={({ pressed }) => ({
+                  flexDirection: 'row',
                   alignItems: 'center',
-                  justifyContent: 'center',
+                  justifyContent: 'space-between',
+                  gap: theme.spacing.sm,
+                  minHeight: theme.minTouchTarget,
+                  paddingHorizontal: theme.spacing.md,
+                  paddingVertical: theme.spacing.sm,
+                  marginVertical: theme.spacing.xs,
+                  backgroundColor: pressed ? theme.colors.surfaceMuted : theme.colors.surface,
                   borderColor: theme.colors.border,
                   borderWidth: theme.mode === 'high-contrast' ? 2 : 1,
-                  borderRadius: theme.radius.md,
-                }}
+                  borderRadius: theme.radius.lg,
+                })}
               >
                 <Text
                   allowFontScaling
+                  numberOfLines={1}
                   style={{
                     color: theme.colors.text,
                     fontSize: theme.fontSizes.body * theme.fontScale,
                     fontWeight: '700',
+                    flexShrink: 1,
                   }}
                 >
-                  Settings
+                  {activeProfile ? `Speaking as: ${activeProfile.name}` : 'Profiles'}
+                </Text>
+                <Text
+                  allowFontScaling
+                  style={{
+                    color: theme.colors.textMuted,
+                    fontSize: theme.fontSizes.caption * theme.fontScale,
+                    fontWeight: '800',
+                  }}
+                >
+                  Change
                 </Text>
               </Pressable>
             </Link>
-          )}
-        </View>
 
-        <Link href="/profiles" asChild>
-          <Pressable
-            testID="open-profiles"
-            accessibilityRole="button"
-            accessibilityLabel={
-              activeProfile
-                ? `Current profile: ${activeProfile.name}. Opens profiles.`
-                : 'Profiles. Opens profiles.'
-            }
-            accessibilityHint="Opens the profiles screen to switch or manage profiles."
-            android_ripple={{ color: theme.colors.surfaceMuted }}
-            style={({ pressed }) => ({
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: theme.spacing.sm,
-              minHeight: theme.minTouchTarget,
-              paddingHorizontal: theme.spacing.md,
-              paddingVertical: theme.spacing.sm,
-              marginBottom: theme.spacing.md,
-              backgroundColor: pressed ? theme.colors.surfaceMuted : theme.colors.surface,
-              borderColor: theme.colors.border,
-              borderWidth: theme.mode === 'high-contrast' ? 2 : 1,
-              borderRadius: theme.radius.lg,
-            })}
-          >
-            <Text
-              allowFontScaling
-              numberOfLines={1}
-              style={{
-                color: theme.colors.text,
-                fontSize: theme.fontSizes.body * theme.fontScale,
-                fontWeight: '700',
-                flexShrink: 1,
+            {/* Language Selector */}
+            <View
+              onLayout={(e) => {
+                languageSelectorYRef.current = e.nativeEvent.layout.y;
               }}
             >
-              {activeProfile ? `Speaking as: ${activeProfile.name}` : 'Profiles'}
+              <LanguageSelector
+                languages={LANGUAGES}
+                capabilities={speech.capabilities}
+                selected={preferences.language}
+                onSelect={(code) => {
+                  void setLanguage(code);
+                }}
+                disabled={bootstrapStatus === 'loading'}
+              />
+            </View>
+
+            <View style={styles.spacer} />
+
+            {/* Quick suggestions section */}
+            <Text accessibilityRole="header" style={headingStyle(theme)}>
+              Quick suggestions
             </Text>
             <Text
-              allowFontScaling
               style={{
                 color: theme.colors.textMuted,
                 fontSize: theme.fontSizes.caption * theme.fontScale,
-                fontWeight: '800',
+                marginBottom: theme.spacing.sm,
               }}
             >
-              Change
+              Tap one to start your message. Nothing is said until you press Speak.
             </Text>
-          </Pressable>
-        </Link>
+            <View style={{ gap: theme.spacing.sm }}>
+              {quickSuggestions.map((suggestion) => (
+                <SuggestionChip
+                  key={suggestion.id}
+                  testID={`quick-suggestion-${suggestion.id}`}
+                  text={suggestion.text}
+                  meta={suggestion.categoryLabel}
+                  onPress={() => setMessage(suggestion.text)}
+                />
+              ))}
+            </View>
 
-        <Text
-          style={{
-            color: theme.colors.textMuted,
-            fontSize: theme.fontSizes.caption * theme.fontScale,
-            marginBottom: theme.spacing.lg,
-          }}
-        >
-          {simplified
-            ? 'Tap a card to say it out loud.'
-            : 'Tap a card to say it out loud, or type your own message below.'}
-        </Text>
+            <View style={styles.spacer} />
+          </>
+        )}
 
-        <LanguageSelector
-          languages={LANGUAGES}
-          capabilities={speech.capabilities}
-          selected={preferences.language}
-          onSelect={(code) => {
-            void setLanguage(code);
-          }}
-          disabled={bootstrapStatus === 'loading'}
-        />
-
-        <View style={styles.spacer} />
-
+        {/* Talk / Home Cards Section */}
         <View style={styles.sectionHeader}>
           <Text accessibilityRole="header" style={headingStyle(theme)}>
             Talk
@@ -303,14 +332,24 @@ export default function HomeScreen() {
           </Text>
         )}
 
-        <View style={styles.spacer} />
-
         {simplified ? (
-          // Simplified Mode keeps one control that must always be reachable: silencing the phone.
-          // Repeat and the status banner are left out so the screen stays as quiet as possible.
-          <StopButton onPress={handleStop} active={speech.speaking} />
+          <View style={{ marginTop: theme.spacing.md }}>
+            <StopButton onPress={handleStop} active={speech.speaking} />
+            <View style={styles.spacer} />
+            <ActionButton
+              testID="exit-simplified"
+              label="Exit Simplified Mode"
+              hint="Returns to the full screen with all the other options."
+              variant="primary"
+              minHeight={64}
+              onPress={() => {
+                void setSimplifiedMode(false);
+              }}
+            />
+          </View>
         ) : (
           <>
+            <View style={styles.spacer} />
             <Text accessibilityRole="header" style={headingStyle(theme)}>
               Speech controls
             </Text>
@@ -326,58 +365,11 @@ export default function HomeScreen() {
             </View>
 
             <View style={styles.spacer} />
-
             <SpeechStatusBanner status={speech.status} error={speech.error} />
           </>
         )}
 
-        <View style={styles.spacer} />
-
-        <Link href="/emergency" asChild>
-          <Pressable
-            testID="open-emergency"
-            accessibilityRole="button"
-            accessibilityLabel="Emergency messages"
-            accessibilityHint="Opens the emergency messages. Each one is spoken with a single tap."
-            android_ripple={{ color: theme.colors.dangerPressed }}
-            style={({ pressed }) => [
-              styles.emergency,
-              {
-                backgroundColor: pressed ? theme.colors.dangerPressed : theme.colors.danger,
-                borderRadius: theme.radius.lg,
-                minHeight: 96,
-                paddingVertical: theme.spacing.lg,
-                paddingHorizontal: theme.spacing.xl,
-                borderColor: theme.mode === 'high-contrast' ? theme.colors.border : 'transparent',
-                borderWidth: theme.mode === 'high-contrast' ? 3 : 0,
-              },
-            ]}
-          >
-            <Text
-              allowFontScaling
-              style={{
-                color: theme.colors.onDanger,
-                fontSize: theme.fontSizes.heading * theme.fontScale,
-                fontWeight: '900',
-                letterSpacing: 1,
-              }}
-            >
-              Emergency
-            </Text>
-            <Text
-              allowFontScaling
-              style={{
-                color: theme.colors.onDanger,
-                fontSize: theme.fontSizes.body * theme.fontScale,
-                marginTop: theme.spacing.xs,
-              }}
-            >
-              Medical help, ambulance, and other urgent messages. Works without internet.
-            </Text>
-          </Pressable>
-        </Link>
-
-        {recent.length > 0 ? (
+        {recent.length > 0 && !simplified ? (
           <>
             <View style={styles.spacer} />
             <View style={styles.sectionHeader}>
@@ -424,7 +416,7 @@ export default function HomeScreen() {
           </>
         ) : null}
 
-        {frequent.length > 0 ? (
+        {frequent.length > 0 && !simplified ? (
           <>
             <View style={styles.spacer} />
             <Text accessibilityRole="header" style={headingStyle(theme)}>
@@ -444,68 +436,34 @@ export default function HomeScreen() {
           </>
         ) : null}
 
-        {simplified ? (
+        {!simplified && (
           <>
             <View style={styles.spacer} />
-            <ActionButton
-              testID="exit-simplified"
-              label="Exit Simplified Mode"
-              hint="Returns to the full screen with all the other options."
-              variant="primary"
-              minHeight={64}
-              onPress={() => {
-                void setSimplifiedMode(false);
-              }}
-            />
-          </>
-        ) : (
-          <>
-            <View style={styles.spacer} />
-
-            <Text accessibilityRole="header" style={headingStyle(theme)}>
-              Quick suggestions
-            </Text>
-            <Text
-              style={{
-                color: theme.colors.textMuted,
-                fontSize: theme.fontSizes.caption * theme.fontScale,
-                marginBottom: theme.spacing.sm,
-              }}
-            >
-              Tap one to start your message. Nothing is said until you press Speak.
-            </Text>
-            <View style={{ gap: theme.spacing.sm }}>
-              {quickSuggestions.map((suggestion) => (
-                <SuggestionChip
-                  key={suggestion.id}
-                  testID={`quick-suggestion-${suggestion.id}`}
-                  text={suggestion.text}
-                  meta={suggestion.categoryLabel}
-                  onPress={() => setMessage(suggestion.text)}
-                />
-              ))}
-            </View>
-
-            <View style={styles.spacer} />
-
-            <Text accessibilityRole="header" style={headingStyle(theme)}>
-              Type anything
-            </Text>
-            <MessageEditor
-              value={message}
-              onChangeText={setMessage}
-              inputRef={inputRef}
-              onSubmit={handleSpeak}
-            />
-            <View style={styles.smallSpacer} />
-            <SpeakButton onPress={handleSpeak} disabled={!canSpeak} speaking={speech.speaking} />
-
-            <View style={styles.spacer} />
-
             <Text accessibilityRole="header" style={headingStyle(theme)}>
               More ways to talk
             </Text>
             <View style={{ gap: theme.spacing.md }}>
+              <Link href="/translate" asChild>
+                <NavCard
+                  testID="open-translate"
+                  label="Language Centre"
+                  description="Translate and transliterate across Indian languages offline."
+                />
+              </Link>
+              <Link href="/isl" asChild>
+                <NavCard
+                  testID="open-isl"
+                  label="Indian Sign Language"
+                  description="Visual reference cards for commonly used signs with community validation."
+                />
+              </Link>
+              <Link href="/conversation" asChild>
+                <NavCard
+                  testID="open-conversation"
+                  label="Conversation"
+                  description="Live captions of what the other person says, with replies you can speak back."
+                />
+              </Link>
               <Link href="/compose" asChild>
                 <NavCard
                   testID="open-compose"
@@ -559,14 +517,26 @@ export default function HomeScreen() {
                   description="Everything you have said, ready to say again."
                 />
               </Link>
+              <Link href="/sounds" asChild>
+                <NavCard
+                  testID="open-sounds"
+                  label="Sound Awareness"
+                  description="Visual and vibration alerts when your phone hears a doorbell, alarm, siren and more."
+                />
+              </Link>
             </View>
           </>
         )}
       </ScrollView>
+
+      {/* Floating toast notification when speech speaks */}
       <SpokenToast
         status={speech.status}
-        bottomOffset={insets.bottom + theme.spacing.lg}
+        bottomOffset={insets.bottom + 65}
       />
+
+      {/* Persistent Bottom Navigation Bar */}
+      {!simplified && <AppBottomNav activeTab="home" />}
     </KeyboardAvoidingView>
   );
 }
@@ -587,12 +557,6 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: 16,
   },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -604,13 +568,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
   },
-  emergency: {
-    justifyContent: 'center',
-  },
   spacer: {
     height: 16,
-  },
-  smallSpacer: {
-    height: 10,
   },
 });

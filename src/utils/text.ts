@@ -1,9 +1,23 @@
+import * as Clipboard from 'expo-clipboard';
+
 /**
  * Text helpers shared by the editor and the speech controller.
  *
  * The normalisation here changes *presentation* only. It never rewrites words, punctuation or
  * meaning: the user must hear exactly what they wrote.
  */
+
+/**
+ * Copies plain text to the system clipboard.
+ */
+export async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    await Clipboard.setStringAsync(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Collapses runs of whitespace into single spaces and trims the ends, because speech engines read

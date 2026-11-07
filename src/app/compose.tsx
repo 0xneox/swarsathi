@@ -1,7 +1,8 @@
 import { Link } from 'expo-router';
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -11,12 +12,15 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ActionButton } from '../components/ActionButton';
+import { LanguageSelector } from '../components/LanguageSelector';
 import { MessageEditor } from '../components/MessageEditor';
+import { MessageSegmentView } from '../components/MessageSegmentView';
 import { SpeechStatusBanner } from '../components/SpeechStatusBanner';
 import { StopButton } from '../components/StopButton';
-import { findLanguageForTag } from '../data/languages';
+import { LANGUAGES, findLanguageForTag, formatLanguageLabel } from '../data/languages';
 import { getStarterSymbol } from '../data/symbols';
-import { messageToPlainText } from '../data/messages';
+import { isMessageEmpty, messageToPlainText } from '../data/messages';
+import { isTransliterationSupported, transliterate } from '../services/transliteration';
 import { useTheme } from '../providers/ThemeProvider';
 import { useAppStore } from '../store/appStore';
 import type { Message, MessageSegment } from '../types';
@@ -37,9 +41,11 @@ export default function ComposeScreen() {
 
   const draft = useAppStore((state) => state.composeDraft);
   const composedMessages = useAppStore((state) => state.composedMessages);
+  const preferences = useAppStore((state) => state.preferences);
   const speech = useAppStore((state) => state.speech);
   const dictation = useAppStore((state) => state.dictation);
   const appendComposeText = useAppStore((state) => state.appendComposeText);
+  const setComposeSegmentLanguage = useAppStore((state) => state.setComposeSegmentLanguage);
   const removeLastComposeSegment = useAppStore((state) => state.removeLastComposeSegment);
   const clearComposeDraft = useAppStore((state) => state.clearComposeDraft);
   const setComposeDraft = useAppStore((state) => state.setComposeDraft);
@@ -49,61 +55,122 @@ export default function ComposeScreen() {
   const shareComposedAudio = useAppStore((state) => state.shareComposedAudio);
   const saveComposedMessage = useAppStore((state) => state.saveComposedMessage);
   const deleteComposedMessage = useAppStore((state) => state.deleteComposedMessage);
+  const refreshComposedMessages = useAppStore((state) => state.refreshComposedMessages);
   const startDictation = useAppStore((state) => state.startDictation);
   const stopDictation = useAppStore((state) => state.stopDictation);
   const cancelDictation = useAppStore((state) => state.cancelDictation);
 
   const [typed, setTyped] = useState('');
   const [status, setStatus] = useState<string | null>(null);
+  // Compose-local choice for the next typed words. It deliberately does not rewrite the global
+  // preference: the draft can mix languages without changing what the rest of the app speaks.
+  const [composeLanguage, setComposeLanguage] = useState<string | null>(null);
+  const [languagePickerIndex, setLanguagePickerIndex] = useState<number | null>(null);
+  const [transliterateEnabled, setTransliterateEnabled] = useState(false);
+
+  useEffect(() => {
+    void refreshComposedMessages();
+  }, [refreshComposedMessages]);
 
   const segments = draft?.segments ?? [];
   const plainText = useMemo(() => (draft ? messageToPlainText(draft) : ''), [draft]);
-  const hasContent = plainText.length > 0;
+  const hasContent = plainText.length > 0 || typed.trim().length > 0;
+  const typedLanguage = composeLanguage ?? preferences.language;
+  const languagePickerSegment =
+    languagePickerIndex === null ? undefined : segments[languagePickerIndex];
+
+  const canTransliterate = isTransliterationSupported(typedLanguage);
+  const liveTransliteration =
+    transliterateEnabled && canTransliterate && typed.trim().length > 0
+      ? transliterate(typed, typedLanguage)
+      : '';
 
   const handleAdd = useCallback(() => {
     if (typed.trim().length === 0) {
       return;
     }
-    appendComposeText(typed);
+    const textToAdd =
+      transliterateEnabled && isTransliterationSupported(typedLanguage)
+        ? transliterate(typed, typedLanguage)
+        : typed;
+    appendComposeText(textToAdd, typedLanguage);
     setTyped('');
     setStatus(null);
-  }, [typed, appendComposeText]);
+  }, [typed, typedLanguage, transliterateEnabled, appendComposeText]);
+
+  const getOrProduceMessage = useCallback((): Message | null => {
+    const textToAdd =
+      transliterateEnabled && isTransliterationSupported(typedLanguage)
+        ? transliterate(typed, typedLanguage)
+        : typed;
+    if (draft && !isMessageEmpty(draft)) {
+      if (textToAdd.trim().length > 0) {
+        appendComposeText(textToAdd, typedLanguage);
+        setTyped('');
+        return useAppStore.getState().composeDraft;
+      }
+      return draft;
+    }
+    if (textToAdd.trim().length > 0) {
+      appendComposeText(textToAdd, typedLanguage);
+      setTyped('');
+      return useAppStore.getState().composeDraft;
+    }
+    return null;
+  }, [draft, typed, typedLanguage, transliterateEnabled, appendComposeText]);
 
   const handleSpeak = useCallback(() => {
-    if (!draft) {
+    const message = getOrProduceMessage();
+    if (!message) {
       return;
     }
     setStatus(null);
-    void speakComposed(draft, 'editor');
-  }, [draft, speakComposed]);
+    void speakComposed(message, 'editor');
+  }, [getOrProduceMessage, speakComposed]);
 
   const handleShareText = useCallback(() => {
-    if (!draft) {
+    const message = getOrProduceMessage();
+    if (!message) {
       return;
     }
     void (async () => {
-      const shared = await shareComposedText(draft);
-      setStatus(shared ? 'Shared as text.' : 'Nothing was shared.');
+      const result = await shareComposedText(message);
+      if (result.ok) {
+        setStatus('Shared as text.');
+      } else if (result.reason === 'dismissed') {
+        // Closing the share sheet is a choice, not a failure to report.
+        setStatus('Nothing was shared.');
+      } else {
+        setStatus(result.reason);
+      }
     })();
-  }, [draft, shareComposedText]);
+  }, [getOrProduceMessage, shareComposedText]);
 
   const handleShareAudio = useCallback(() => {
-    if (!draft) {
+    const message = getOrProduceMessage();
+    if (!message) {
       return;
     }
     void (async () => {
       setStatus('Preparing the audio…');
-      const shared = await shareComposedAudio(draft);
-      setStatus(shared ? 'Shared as audio.' : 'The audio could not be shared.');
+      const result = await shareComposedAudio(message);
+      // The engine explains exactly what went wrong (no voice for a language, engine missing), so
+      // that reason is shown instead of a generic failure the user cannot act on.
+      setStatus(result.ok ? 'Shared as audio.' : result.reason);
     })();
-  }, [draft, shareComposedAudio]);
+  }, [getOrProduceMessage, shareComposedAudio]);
 
   const handleSave = useCallback(() => {
+    const message = getOrProduceMessage();
+    if (!message) {
+      setStatus('There is nothing to save yet.');
+      return;
+    }
     void (async () => {
-      const saved = await saveComposedMessage();
+      const saved = await saveComposedMessage(message);
       setStatus(saved ? 'Saved to your messages.' : 'There is nothing to save yet.');
     })();
-  }, [saveComposedMessage]);
+  }, [getOrProduceMessage, saveComposedMessage]);
 
   const handleDictate = useCallback(() => {
     void startDictation();
@@ -116,6 +183,16 @@ export default function ComposeScreen() {
   const handleCancelDictation = useCallback(() => {
     void cancelDictation();
   }, [cancelDictation]);
+
+  const handleSegmentLanguageSelect = useCallback(
+    (code: string) => {
+      if (languagePickerIndex !== null) {
+        setComposeSegmentLanguage(languagePickerIndex, code);
+      }
+      setLanguagePickerIndex(null);
+    },
+    [languagePickerIndex, setComposeSegmentLanguage],
+  );
 
   return (
     <KeyboardAvoidingView
@@ -164,7 +241,12 @@ export default function ComposeScreen() {
               style={[styles.chipRow, { gap: theme.spacing.sm }]}
             >
               {segments.map((segment, index) => (
-                <DraftChip key={`${index}-${segment.text}`} segment={segment} />
+                <DraftChip
+                  key={`${index}-${segment.text}`}
+                  segment={segment}
+                  index={index}
+                  onPress={() => setLanguagePickerIndex(index)}
+                />
               ))}
             </View>
           )}
@@ -223,6 +305,89 @@ export default function ComposeScreen() {
           <Text accessibilityRole="header" style={headingStyle(theme)}>
             Type a word or sentence
           </Text>
+          <Text
+            style={{
+              color: theme.colors.textMuted,
+              fontSize: theme.fontSizes.caption * theme.fontScale,
+            }}
+          >
+            Language for new words. Tap a message part above to change its language.
+          </Text>
+          <LanguageSelector
+            languages={LANGUAGES}
+            capabilities={speech.capabilities}
+            selected={typedLanguage}
+            onSelect={setComposeLanguage}
+          />
+          <Pressable
+            testID="compose-transliterate-toggle"
+            accessibilityRole="switch"
+            accessibilityLabel="Type Roman → get native script"
+            accessibilityState={{ checked: transliterateEnabled }}
+            onPress={() => setTransliterateEnabled((prev) => !prev)}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              paddingVertical: theme.spacing.sm,
+              paddingHorizontal: theme.spacing.md,
+              backgroundColor: transliterateEnabled ? theme.colors.surfaceMuted : theme.colors.surface,
+              borderColor: theme.colors.border,
+              borderWidth: theme.mode === 'high-contrast' ? 2 : 1,
+              borderRadius: theme.radius.md,
+              minHeight: theme.minTouchTarget,
+            }}
+          >
+            <Text
+              style={{
+                color: theme.colors.text,
+                fontSize: theme.fontSizes.body * theme.fontScale,
+                fontWeight: '700',
+              }}
+            >
+              Type Roman → get native script
+            </Text>
+            <Text
+              style={{
+                color: transliterateEnabled ? theme.colors.primary : theme.colors.textMuted,
+                fontSize: theme.fontSizes.body * theme.fontScale,
+                fontWeight: '800',
+              }}
+            >
+              {transliterateEnabled ? 'ON' : 'OFF'}
+            </Text>
+          </Pressable>
+          {transliterateEnabled && liveTransliteration ? (
+            <View
+              testID="compose-transliteration-preview"
+              style={{
+                padding: theme.spacing.sm,
+                backgroundColor: theme.colors.surfaceMuted,
+                borderRadius: theme.radius.md,
+                borderColor: theme.colors.border,
+                borderWidth: 1,
+              }}
+            >
+              <Text
+                style={{
+                  color: theme.colors.textMuted,
+                  fontSize: theme.fontSizes.caption * theme.fontScale,
+                  fontWeight: '600',
+                }}
+              >
+                Native script preview:
+              </Text>
+              <Text
+                style={{
+                  color: theme.colors.text,
+                  fontSize: theme.fontSizes.body * theme.fontScale,
+                  fontWeight: '700',
+                }}
+              >
+                {liveTransliteration}
+              </Text>
+            </View>
+          ) : null}
           <MessageEditor value={typed} onChangeText={setTyped} onSubmit={handleAdd} testID="compose-input" />
           <ActionButton
             testID="compose-add"
@@ -289,6 +454,35 @@ export default function ComposeScreen() {
                 }}
               >
                 Open the symbol board
+              </Text>
+            </Pressable>
+          </Link>
+          <Link href="/translate" asChild>
+            <Pressable
+              testID="compose-open-translate"
+              accessibilityRole="button"
+              accessibilityLabel="Language Centre"
+              accessibilityHint="Opens the Language Centre to translate and transliterate messages."
+              android_ripple={{ color: theme.colors.surfaceMuted }}
+              style={({ pressed }) => ({
+                minHeight: theme.minTouchTarget,
+                alignItems: 'center',
+                justifyContent: 'center',
+                paddingHorizontal: theme.spacing.md,
+                backgroundColor: pressed ? theme.colors.surfaceMuted : theme.colors.surface,
+                borderColor: theme.colors.border,
+                borderWidth: theme.mode === 'high-contrast' ? 2 : 1,
+                borderRadius: theme.radius.md,
+              })}
+            >
+              <Text
+                style={{
+                  color: theme.colors.text,
+                  fontSize: theme.fontSizes.body * theme.fontScale,
+                  fontWeight: '800',
+                }}
+              >
+                Open Language Centre (Translate)
               </Text>
             </Pressable>
           </Link>
@@ -373,18 +567,39 @@ export default function ComposeScreen() {
           </View>
         ) : null}
       </ScrollView>
+
+      <SegmentLanguagePicker
+        visible={languagePickerSegment !== undefined}
+        selected={languagePickerSegment?.language ?? ''}
+        onSelect={handleSegmentLanguageSelect}
+        onClose={() => setLanguagePickerIndex(null)}
+      />
     </KeyboardAvoidingView>
   );
 }
 
 /** One piece of the draft: a typed word, or a tapped symbol shown with its picture. */
-function DraftChip({ segment }: { segment: MessageSegment }) {
+function DraftChip({
+  segment,
+  index,
+  onPress,
+}: {
+  segment: MessageSegment;
+  index: number;
+  onPress: () => void;
+}) {
   const theme = useTheme();
   const glyph = segment.origin.kind === 'symbol' ? getStarterSymbol(segment.origin.refId ?? '')?.glyph : undefined;
   const languageName = findLanguageForTag(segment.language)?.englishName ?? segment.language;
+  const scriptLabel = segment.script ?? 'Latn';
 
   return (
-    <View
+    <Pressable
+      testID={`compose-segment-${index}`}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`${segment.text}. ${languageName} (${scriptLabel}). Tap to change language.`}
+      accessibilityHint="Opens the language choices for this part of the message."
       style={{
         flexDirection: 'row',
         alignItems: 'center',
@@ -396,8 +611,6 @@ function DraftChip({ segment }: { segment: MessageSegment }) {
         paddingHorizontal: theme.spacing.md,
         paddingVertical: theme.spacing.sm,
       }}
-      accessible
-      accessibilityLabel={`${segment.text}. ${languageName}.`}
     >
       {glyph ? (
         <Text style={{ fontSize: theme.fontSizes.label * theme.fontScale }}>{glyph}</Text>
@@ -411,7 +624,118 @@ function DraftChip({ segment }: { segment: MessageSegment }) {
       >
         {segment.text}
       </Text>
-    </View>
+      <Text
+        testID={`compose-segment-badge-${index}`}
+        style={{
+          color: theme.colors.textMuted,
+          fontSize: theme.fontSizes.caption * theme.fontScale,
+          fontWeight: '700',
+        }}
+      >
+        {languageName} · {scriptLabel}
+      </Text>
+    </Pressable>
+  );
+}
+
+function SegmentLanguagePicker({
+  visible,
+  selected,
+  onSelect,
+  onClose,
+}: {
+  visible: boolean;
+  selected: string;
+  onSelect: (code: string) => void;
+  onClose: () => void;
+}) {
+  const theme = useTheme();
+  const selectedCode = findLanguageForTag(selected)?.code ?? selected;
+  const selectedPrimary = selectedCode.split('-')[0];
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' }}>
+        <View
+          style={{
+            backgroundColor: theme.colors.background,
+            borderTopLeftRadius: theme.radius.lg,
+            borderTopRightRadius: theme.radius.lg,
+            padding: theme.spacing.lg,
+            gap: theme.spacing.sm,
+            maxHeight: '75%',
+          }}
+          accessibilityViewIsModal
+        >
+          <Text
+            accessibilityRole="header"
+            style={{
+              color: theme.colors.text,
+              fontSize: theme.fontSizes.title * theme.fontScale,
+              fontWeight: '800',
+            }}
+          >
+            Language for this part
+          </Text>
+          <ScrollView>
+            {LANGUAGES.map((language) => {
+              const isSelected = language.code.split('-')[0] === selectedPrimary;
+              const label = formatLanguageLabel(language);
+              return (
+                <Pressable
+                  key={language.code}
+                  testID={`segment-language-option-${language.code}`}
+                  onPress={() => onSelect(language.code)}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: isSelected }}
+                  accessibilityLabel={label}
+                  style={{
+                    minHeight: theme.minTouchTarget,
+                    justifyContent: 'center',
+                    borderBottomWidth: 1,
+                    borderBottomColor: theme.colors.border,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: theme.colors.text,
+                      fontSize: theme.fontSizes.body * theme.fontScale,
+                      fontWeight: isSelected ? '800' : '600',
+                    }}
+                  >
+                    {isSelected ? `✓ ${label}` : label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+          <Pressable
+            testID="segment-language-close"
+            onPress={onClose}
+            accessibilityRole="button"
+            accessibilityLabel="Close language list"
+            style={{
+              minHeight: theme.minTouchTarget,
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderColor: theme.colors.border,
+              borderWidth: theme.mode === 'high-contrast' ? 2 : 1,
+              borderRadius: theme.radius.md,
+            }}
+          >
+            <Text
+              style={{
+                color: theme.colors.text,
+                fontSize: theme.fontSizes.body * theme.fontScale,
+                fontWeight: '700',
+              }}
+            >
+              Close
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -428,7 +752,6 @@ function SavedMessageRow({
 }) {
   const theme = useTheme();
   const text = messageToPlainText(message);
-  const languageName = findLanguageForTag(message.segments[0]?.language ?? '')?.englishName;
 
   return (
     <View
@@ -450,16 +773,7 @@ function SavedMessageRow({
       >
         {text}
       </Text>
-      {languageName ? (
-        <Text
-          style={{
-            color: theme.colors.textMuted,
-            fontSize: theme.fontSizes.caption * theme.fontScale,
-          }}
-        >
-          {languageName}
-        </Text>
-      ) : null}
+      <MessageSegmentView message={message} testID={`saved-message-segments-${message.id}`} />
       <View style={[styles.row, { gap: theme.spacing.sm }]}>
         <View style={styles.flex}>
           <ActionButton label="Open" hint="Loads this message so you can change it." onPress={onOpen} />

@@ -8,6 +8,7 @@ import {
   messageToSpeechPlan,
   parseMessage,
   serializeMessage,
+  splitTextByScript,
   textSegment,
 } from '../../src/data/messages';
 import type { Message, MessageSegment } from '../../src/types';
@@ -88,6 +89,65 @@ describe('textSegment', () => {
   it('records the standalone flag only when asked', () => {
     expect(textSegment('water', 'en').standalone).toBeUndefined();
     expect(textSegment('water', 'en', { kind: 'symbol' }, true).standalone).toBe(true);
+  });
+});
+
+describe('splitTextByScript', () => {
+  // "വെള്ളം" (water) in Malayalam script, built from code points so the file stays ASCII-safe.
+  const ML = String.fromCodePoint(0x0d35, 0x0d46, 0x0d33, 0x0d4d, 0x0d33, 0x0d02);
+
+  it('returns no parts for empty or whitespace-only input', () => {
+    expect(splitTextByScript('', 'en')).toEqual([]);
+    expect(splitTextByScript('   ', 'en')).toEqual([]);
+  });
+
+  it('keeps Latin text in the supplied fallback language', () => {
+    expect(splitTextByScript('vello vennam', 'ml')).toEqual([
+      { text: 'vello vennam', script: 'Latn', language: 'ml' },
+    ]);
+  });
+
+  it('splits Malayalam script from Latin text', () => {
+    expect(splitTextByScript(`${ML} water`, 'en')).toEqual([
+      { text: ML, script: 'Mlym', language: 'ml' },
+      { text: 'water', script: 'Latn', language: 'en' },
+    ]);
+  });
+
+  it('splits Latin from Malayalam when the order is reversed', () => {
+    expect(splitTextByScript(`water ${ML}`, 'en')).toEqual([
+      { text: 'water', script: 'Latn', language: 'en' },
+      { text: ML, script: 'Mlym', language: 'ml' },
+    ]);
+  });
+
+  it('keeps punctuation with the script run it follows', () => {
+    expect(splitTextByScript(`${ML}, water`, 'en')).toEqual([
+      { text: `${ML},`, script: 'Mlym', language: 'ml' },
+      { text: 'water', script: 'Latn', language: 'en' },
+    ]);
+  });
+
+  it('keeps digits and spaces inside the surrounding script run', () => {
+    expect(splitTextByScript(`water 2 ${ML}`, 'en')).toEqual([
+      { text: 'water 2', script: 'Latn', language: 'en' },
+      { text: ML, script: 'Mlym', language: 'ml' },
+    ]);
+  });
+
+  it('maps Devanagari runs to Hindi', () => {
+    expect(splitTextByScript('मुझे पानी चाहिए please', 'en')).toEqual([
+      { text: 'मुझे पानी चाहिए', script: 'Deva', language: 'hi' },
+      { text: 'please', script: 'Latn', language: 'en' },
+    ]);
+  });
+
+  it('produces alternating runs for code-mixed input', () => {
+    expect(splitTextByScript(`${ML} water ${ML}`, 'en')).toEqual([
+      { text: ML, script: 'Mlym', language: 'ml' },
+      { text: 'water', script: 'Latn', language: 'en' },
+      { text: ML, script: 'Mlym', language: 'ml' },
+    ]);
   });
 });
 

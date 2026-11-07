@@ -69,7 +69,7 @@ PRAGMA foreign_keys = ON;
 `;
 
 /** The schema revision this build expects. Recorded in SQLite's own `user_version`. */
-export const LATEST_SCHEMA_VERSION = 9;
+export const LATEST_SCHEMA_VERSION = 12;
 
 /** A column a migration must add when an older database does not have it yet. */
 export interface ColumnUpgrade {
@@ -461,6 +461,91 @@ export const MIGRATIONS: Migration[] = [
       )`,
       `CREATE INDEX IF NOT EXISTS idx_installed_packs_kind
         ON installed_packs (kind, installedAt)`,
+    ],
+  },
+  {
+    version: 10,
+    description: 'Migrate saved messages into single-segment composed messages',
+    statements: [
+      // Converts stored plain-text saved messages into single-segment Messages in composed_messages.
+      // Safe to replay (INSERT OR IGNORE) and leaves saved_messages completely intact.
+      `INSERT OR IGNORE INTO composed_messages (id, profileId, payload, text, language, createdAt, updatedAt)
+       SELECT
+         id,
+         'profile-default',
+         json_object(
+           'id', id,
+           'segments', json_array(
+             json_object(
+               'text', text,
+               'language', language,
+               'script', 'Latn',
+               'origin', json_object('kind', 'text'),
+               'editableAs', 'text'
+             )
+           ),
+           'meta', json_object(
+             'source', 'editor',
+             'profileId', 'profile-default',
+             'createdAt', createdAt,
+             'updatedAt', updatedAt,
+             'parents', json_array(),
+             'flags', json_object()
+           ),
+           'renderHints', json_object(
+             'speak', json_array(json_object('language', language)),
+             'share', json_object('preferred', 'text')
+           )
+         ),
+         text,
+         language,
+         createdAt,
+         updatedAt
+       FROM saved_messages`,
+    ],
+  },
+  {
+    version: 11,
+    description: 'Voice persona and gender preference per profile',
+    statements: [],
+    ensureColumns: [
+      {
+        table: 'profile_preferences',
+        column: 'personaId',
+        definition: 'TEXT',
+      },
+      {
+        table: 'profile_preferences',
+        column: 'voiceGender',
+        definition: 'TEXT',
+      },
+    ],
+  },
+  {
+    version: 12,
+    description: 'Sound awareness settings and detection history',
+    statements: [
+      // One row per profile: the whole SoundAwarenessSettings object as JSON, read and written
+      // together like composed_messages.payload. Profile-scoped because which sounds matter is a
+      // personal choice, not a device fact.
+      `CREATE TABLE IF NOT EXISTS sound_awareness_settings (
+        profileId TEXT PRIMARY KEY NOT NULL,
+        payload TEXT NOT NULL
+      )`,
+      // Detected sound events. Audio is never stored - only which class fired, how confident the
+      // model was, and when. Profile-scoped like the settings that produced the alerts.
+      `CREATE TABLE IF NOT EXISTS sound_events (
+        id TEXT PRIMARY KEY NOT NULL,
+        profileId TEXT NOT NULL DEFAULT 'profile-default',
+        soundType TEXT NOT NULL,
+        label TEXT NOT NULL,
+        confidence REAL NOT NULL,
+        detectedAt INTEGER NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_sound_events_detected_at
+        ON sound_events (detectedAt DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_sound_events_profile
+        ON sound_events (profileId, detectedAt DESC)`,
     ],
   },
 ];

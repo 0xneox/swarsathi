@@ -7,15 +7,18 @@ import {
 } from '../../src/data/languages';
 
 describe('language registry', () => {
-  it('ships all six Part 1 languages', () => {
-    expect(LANGUAGES.map((language) => language.code)).toEqual([
-      'en-IN',
-      'ml-IN',
-      'hi-IN',
-      'ta-IN',
-      'te-IN',
-      'kn-IN',
-    ]);
+  it('ships all 22 Eighth Schedule languages plus English', () => {
+    const codes = LANGUAGES.map((language) => language.code);
+    expect(codes).toHaveLength(23);
+    expect(codes).toContain('en-IN');
+    const eighthSchedule = [
+      'as-IN', 'bn-IN', 'brx-IN', 'doi-IN', 'gu-IN', 'hi-IN', 'kn-IN', 'ks-IN',
+      'kok-IN', 'mai-IN', 'ml-IN', 'mni-IN', 'mr-IN', 'ne-IN', 'or-IN', 'pa-IN',
+      'sa-IN', 'sat-IN', 'sd-IN', 'ta-IN', 'te-IN', 'ur-IN',
+    ];
+    for (const code of eighthSchedule) {
+      expect(codes).toContain(code);
+    }
   });
 
   it('does not advertise any language as verified before a physical device test', () => {
@@ -28,7 +31,7 @@ describe('language registry', () => {
 
   it('gives every language a code, an English name and a native name', () => {
     for (const language of LANGUAGES) {
-      expect(language.code).toMatch(/^[a-z]{2}-[A-Z]{2}$/);
+      expect(language.code).toMatch(/^[a-z]{2,3}-[A-Z]{2}$/);
       expect(language.englishName.length).toBeGreaterThan(0);
       expect(language.nativeName.length).toBeGreaterThan(0);
     }

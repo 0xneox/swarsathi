@@ -10,14 +10,55 @@
 export interface Language {
   /** BCP-47 language tag, e.g. `ml-IN`. This is the key used everywhere else. */
   code: string;
+  /** Optional alias for code. */
+  id?: string;
   /** English name, used as a stable fallback label. */
   englishName: string;
   /** Name in its own script, shown next to the English name. */
   nativeName: string;
+  /** Optional alias for nativeName. */
+  autonym?: string;
   /** Whether SwarSathi has physically verified spoken output for this language on a device. */
   verifiedOnDevice: boolean;
   /** Human readable caveat shown in Settings. */
   note?: string;
+  /** Primary script code used by this language (e.g. Deva, Beng, Taml, etc.) */
+  script?: ScriptCode;
+  /** Detailed tracked capabilities per app.md §3 */
+  capabilities?: LanguageTrackedCapabilities;
+}
+
+/** Quality status of language TTS output (honest reporting per app.md §3). */
+export type LanguageQualityStatus =
+  | 'unverified'
+  | 'preview'
+  | 'supported'
+  | 'verified';
+
+/** Male and female voice availability on device or through neural catalog. */
+export interface GenderVoiceAvailability {
+  male: boolean;
+  female: boolean;
+}
+
+/**
+ * Seven independent capability dimensions tracked per language per app.md §3.
+ */
+export interface LanguageTrackedCapabilities {
+  /** 1. Interface translation availability (e.g. phrases/UI translated into this language) */
+  interfaceTranslation: boolean;
+  /** 2. Keyboard and text input support (native script input or deterministic transliteration) */
+  keyboardInput: boolean;
+  /** 3. Native TTS availability on device */
+  nativeTts: boolean;
+  /** 4. Neural TTS availability (downloadable or installed model exists) */
+  neuralTts: boolean;
+  /** 5. Offline speech availability (usable without internet connection) */
+  offlineSpeech: boolean;
+  /** 6. Male and female voice availability */
+  genderVoices: GenderVoiceAvailability;
+  /** 7. Quality status (honest reporting; neural quality never over-claimed) */
+  qualityStatus: LanguageQualityStatus;
 }
 
 /**
@@ -63,6 +104,7 @@ export interface SpeechOptions {
   rate: number;
   pitch: number;
   voiceId?: string;
+  preferredVoiceEngine?: string;
 }
 
 /** Lifecycle callbacks an engine reports back through `subscribe`. */
@@ -262,6 +304,25 @@ export interface SavedMessage {
   updatedAt: number;
 }
 
+/**
+ * The seven voice personas from the product brief.
+ *
+ * A persona is a named way of sounding — Friendly, Gentle and so on — not a specific engine voice.
+ * It maps onto whatever rate, pitch and voice controls the active engine can actually honour, so a
+ * persona is a preference the device resolves honestly rather than a promise of a voice model.
+ */
+export type VoicePersonaId =
+  | 'friendly'
+  | 'gentle'
+  | 'confident'
+  | 'expressive'
+  | 'mature'
+  | 'youthful'
+  | 'clear';
+
+/** Gender preference for voice selection. `any` leaves the choice to the engine. */
+export type VoiceGender = 'any' | 'male' | 'female';
+
 /** Everything that must survive an application restart. */
 export interface UserPreferences {
   /**
@@ -271,6 +332,8 @@ export interface UserPreferences {
    * user has installed at least one voice model; the store falls back otherwise.
    */
   engineId: SpeechEngineId;
+  /** Optional preferred voice engine alias. */
+  preferredVoiceEngine?: SpeechEngineId;
   /** BCP-47 language tag. */
   language: string;
   /** 0.5x - 2.0x. */
@@ -279,6 +342,15 @@ export interface UserPreferences {
   pitch: number;
   /** Preferred voice, or `null` to let the engine choose. */
   voiceId: string | null;
+  /**
+   * The persona the user chose to be heard as, or `null` for no persona.
+   *
+   * Stored per profile. The persona sets starting rate and pitch values; afterwards the user can
+   * still adjust those controls directly, and the persona id remains as the label of the choice.
+   */
+  personaId?: VoicePersonaId | null;
+  /** Gender preference applied when picking a voice. `any` (the default) never filters. */
+  voiceGender?: VoiceGender;
   /** Multiplier applied on top of the system font scale. */
   fontScale: number;
   highContrast: boolean;
@@ -299,6 +371,8 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   speechRate: 1.0,
   pitch: 1.0,
   voiceId: null,
+  personaId: null,
+  voiceGender: 'any',
   fontScale: 1.0,
   highContrast: false,
   simplifiedMode: false,
@@ -701,15 +775,43 @@ export interface CaregiverSettings {
  * Where one segment's wording came from.
  *
  * Provenance is what lets an AAC-built message be re-opened as symbols instead of only as text,
- * and what lets diagnostics tell a tapped word from typed one.
+ * and what lets diagnostics tell a tapped word from a typed one.
  */
-export type MessageOriginKind = 'text' | 'symbol' | 'phrase' | 'board-card' | 'dictation' | 'imported';
+export type MessageOriginKind =
+  | 'symbol'
+  | 'wordEntry'
+  | 'rawInput'
+  | 'photo'
+  | 'text'
+  | 'phrase'
+  | 'board-card'
+  | 'dictation'
+  | 'imported';
 
 export interface MessageOrigin {
   kind: MessageOriginKind;
   /** Stable id of the thing the segment came from (symbol id, phrase key, card id), when known. */
   refId?: string;
 }
+
+/** Recognized script subtags across launch and candidate languages. */
+export type ScriptCode =
+  | 'Latn'
+  | 'Mlym'
+  | 'Deva'
+  | 'Taml'
+  | 'Telu'
+  | 'Knda'
+  | 'Beng'
+  | 'Gujr'
+  | 'Guru'
+  | 'Orya'
+  | 'Arab'
+  | 'Olck'
+  | (string & {});
+
+/** How a segment can be edited in the composer / AAC interfaces. */
+export type SegmentEditableAs = 'symbol' | 'text' | 'both';
 
 /**
  * One ordered piece of a message.
@@ -720,19 +822,69 @@ export interface MessageOrigin {
 export interface MessageSegment {
   /** The resolved wording of this segment. */
   text: string;
-  /** BCP-47 language subtag without script, e.g. `ml`, `en`, `hi`. */
+  /** BCP-47 language subtag without script, e.g. "ml", "en", "hi". */
   language: string;
-  /** Unicode script subtag, e.g. `Latn`, `Mlym`, `Deva`, `Taml`, `Telu`, `Knda`. */
-  script: string;
+  /** Script independent of language: Latn|Mlym|Deva|Taml|Telu|Knda and others. */
+  script: ScriptCode;
+  /** Where this segment came from. */
   origin: MessageOrigin;
+  /** How this segment may be re-edited. */
+  editableAs?: SegmentEditableAs;
   /** Set when the wording stands alone (a tapped symbol) rather than flowing into neighbours. */
   standalone?: boolean;
 }
 
+/** Authoring source of the message. */
+export type MessageSource =
+  | 'keyboard'
+  | 'aac-grid'
+  | 'dictation'
+  | 'translation'
+  | 'voice-clone'
+  | 'imported'
+  | 'compose'
+  | 'aac'
+  | 'editor'
+  | 'board';
+
+export interface MessageMetaFlags {
+  translated?: boolean;
+  transliterated?: boolean;
+  edited?: boolean;
+}
+
+export type MessageId = string;
+
+export interface MessageMeta {
+  /** Where the message was authored. */
+  source: MessageSource;
+  /** Profile that created it, when known. Links to multi-profile management. */
+  profileId?: string;
+  createdAt: number;
+  updatedAt?: number;
+  /** Lightweight lineage pointers to parent message ids (translation, edit). */
+  parents?: MessageId[];
+  /** State flags for transformation lineage. */
+  flags?: MessageMetaFlags;
+}
+
+export interface MessageSpeakHint {
+  language: string;
+  voiceId?: string;
+  rate?: number;
+  pitch?: number;
+}
+
+export interface MessageShareHint {
+  preferred: 'text' | 'audio';
+}
+
 /** How the author wants a message rendered. Advisory only — renderers may override. */
 export interface MessageRenderHints {
-  /** Preferred output ordering hint; renderers decide the actual format. */
-  share?: 'text' | 'audio';
+  /** Advisory speak parameters per language run. */
+  speak?: MessageSpeakHint[];
+  /** Preferred share format. */
+  share?: MessageShareHint;
 }
 
 /**
@@ -743,19 +895,9 @@ export interface MessageRenderHints {
  * keep its own provenance and lineage so it can be edited and re-rendered later.
  */
 export interface Message {
-  id: string;
+  id: MessageId;
   segments: MessageSegment[];
-  meta: {
-    /** Where the message was authored. */
-    source: 'compose' | 'aac' | 'editor' | 'board' | 'imported';
-    /** Profile that created it, when known. */
-    profileId?: string;
-    createdAt: number;
-    updatedAt: number;
-    /** Lineage: ids of messages this one was derived from (translation, edit). Kept lightweight. */
-    parents?: string[];
-    flags?: { translated?: boolean; transliterated?: boolean; edited?: boolean };
-  };
+  meta: MessageMeta;
   renderHints?: MessageRenderHints;
 }
 
@@ -859,7 +1001,7 @@ export interface CustomSymbol {
 // region Sprint C: downloadable packs
 
 /** What a downloadable pack contains. */
-export type PackKind = 'voice' | 'symbols';
+export type PackKind = 'voice' | 'symbols' | 'translation';
 
 /** How a pack is packaged. Restricted to the formats the device can already verify. */
 export type PackArchiveFormat = 'tar.bz2' | 'zip';

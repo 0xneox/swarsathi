@@ -87,10 +87,14 @@ import {
   type SpeechEngineId,
   type SpeechOptions,
   type SpeechRecognition,
+  type SpeechStatus,
   type SymbolCategory,
+  type InstalledPack,
   type SymbolEntry,
   type SymbolProvider,
   type UserPreferences,
+  type VoiceGender,
+  type VoicePersonaId,
 } from '../types';
 import { buildDefaultBoards, normalizeBoardTitle, resolveBoardCard } from '../data/boards';
 import { STARTER_SYMBOL_ENTRIES, SYMBOL_CATEGORIES } from '../data/symbols';
@@ -140,6 +144,13 @@ import {
   listSymbolEntries,
   searchSymbolEntries,
 } from '../services/symbols/SymbolProvider';
+import { PackSymbolProvider } from '../services/symbols/PackSymbolProvider';
+import { arasaacInstallDeps, installArasaacPack } from '../services/symbols/arasaacInstaller';
+import {
+  InMemoryInstalledPackRepository,
+  SqliteInstalledPackRepository,
+  type InstalledPackRepository,
+} from '../services/storage/packs';
 import {
   deleteCustomSymbolImage,
   pickCustomSymbolImage,
@@ -156,15 +167,19 @@ import { createId } from '../utils/id';
 import { logger } from '../utils/logger';
 import {
   createMessageId,
-  defaultLanguageForScript,
-  detectScript,
   isMessageEmpty,
   messageToPlainText,
   messageToSpeechPlan,
+  splitTextByScript,
   textSegment,
 } from '../data/messages';
 import { findLanguageForTag } from '../data/languages';
-import { shareAudio, shareText } from '../services/share/share';
+import {
+  getVoicePersona,
+  matchVoiceForGender,
+  offlineVoicesForLanguage,
+} from '../data/personas';
+import { shareAudioPlan, shareText, type AudioPlanEntry, type ShareResult } from '../services/share/share';
 import {
   InMemoryComposedMessageRepository,
   SqliteComposedMessageRepository,
@@ -330,6 +345,8 @@ export interface AppState {
   symbolEntries: SymbolEntry[];
   /** The category chips the board shows, from every provider, in display order. */
   symbolCategories: SymbolCategory[];
+  /** Symbol packs installed on this device (ARASAAC today). Device-scoped, not profile-scoped. */
+  symbolPacks: InstalledPack[];
   /** Live dictation state, mirrored from the recognition adapter. Session state, not persisted. */
   dictation: DictationState;
 
@@ -341,6 +358,10 @@ export interface AppState {
   setSpeechRate: (rate: number) => Promise<void>;
   setPitch: (pitch: number) => Promise<void>;
   setVoiceId: (voiceId: string | null) => Promise<void>;
+  /** Chooses the voice persona for this profile; `null` clears it. Applies its rate/pitch preset. */
+  setPersona: (personaId: VoicePersonaId | null) => Promise<void>;
+  /** Sets the gender preference used when matching voices by name. */
+  setVoiceGender: (gender: VoiceGender) => Promise<void>;
   setFontScale: (scale: number) => Promise<void>;
   setHighContrast: (enabled: boolean) => Promise<void>;
   setSimplifiedMode: (enabled: boolean) => Promise<void>;
@@ -380,13 +401,17 @@ export interface AppState {
 
   /** Part 6: the unified Message pipeline. */
   setComposeDraft: (message: Message | null) => void;
-  appendComposeText: (text: string) => void;
+  appendComposeText: (text: string, language?: string) => void;
+  /** Changes the language one draft segment is spoken in, without touching the others. */
+  setComposeSegmentLanguage: (index: number, language: string) => void;
   /** Adds a segment (a tapped symbol, a phrase) to the draft. `source` records where it came from. */
   appendComposeSegment: (
     segment: Message['segments'][number],
     source?: Message['meta']['source']
   ) => void;
   removeLastComposeSegment: () => void;
+  /** Removes one segment from the draft by its position, for the sentence strip's per-chip remove. */
+  removeComposeSegmentAt: (index: number) => void;
   clearComposeDraft: () => void;
   refreshComposedMessages: () => Promise<void>;
   saveComposedMessage: (message?: Message) => Promise<Message | null>;
@@ -394,12 +419,16 @@ export interface AppState {
   /** Speaks a Message segment-by-segment in each segment's own language. */
   speakComposed: (message: Message, source?: CommunicationSource) => Promise<void>;
   /** Shares a Message as text through the system share sheet. */
-  shareComposedText: (message: Message) => Promise<boolean>;
-  /** Renders a Message to audio and shares the file. Android TTS engine only. */
-  shareComposedAudio: (message: Message) => Promise<boolean>;
+  shareComposedText: (message: Message) => Promise<ShareResult>;
+  /** Renders a Message to audio, in each segment's own language, and shares it. Android only. */
+  shareComposedAudio: (message: Message) => Promise<ShareResult>;
 
   /** Reloads the board's pictures from every provider. */
   loadSymbols: () => Promise<void>;
+  /** Re-reads which symbol packs are installed and refreshes `symbolPacks`. */
+  refreshSymbolPacks: () => Promise<void>;
+  /** Downloads the ARASAAC core picture pack once, then makes it available offline. */
+  installArasaacPack: () => Promise<'installed' | 'failed'>;
   /** Searches every provider at once; an empty query returns everything. */
   searchSymbols: (query: string, language: string) => Promise<SymbolEntry[]>;
   /** Asks the person for a picture, stores it and adds it to the board. */
@@ -548,6 +577,22 @@ let customSymbolRepository: CustomSymbolRepository = new SqliteCustomSymbolRepos
  */
 let symbolProviders: SymbolProvider[] = createSymbolProviders(customSymbolRepository);
 
+/** Installed symbol packs (ARASAAC today) the board can draw from, in install order. */
+let symbolPackRepository: InstalledPackRepository = new SqliteInstalledPackRepository();
+let packSymbolProviders: SymbolProvider[] = [];
+
+function rebuildSymbolProviders(): void {
+  symbolProviders = createSymbolProviders(customSymbolRepository, packSymbolProviders);
+}
+
+/** Re-reads which symbol packs are installed and rebuilds the provider list. */
+async function refreshPackSymbolProviders(): Promise<InstalledPack[]> {
+  const packs = await symbolPackRepository.listByKind('symbols');
+  packSymbolProviders = packs.map((pack) => new PackSymbolProvider(pack));
+  rebuildSymbolProviders();
+  return packs;
+}
+
 export function getSpeechController(): SpeechController {
   return controller;
 }
@@ -648,7 +693,14 @@ export function setComposedMessageStorageForTesting(repository: ComposedMessageR
 /** Test seam for the custom-symbol repository behind the board's "My pictures" provider. */
 export function setCustomSymbolStorageForTesting(repository: CustomSymbolRepository | null): void {
   customSymbolRepository = repository ?? new SqliteCustomSymbolRepository();
-  symbolProviders = createSymbolProviders(customSymbolRepository);
+  rebuildSymbolProviders();
+}
+
+/** Test seam for the installed symbol-pack repository behind the board's pack provider. */
+export function setSymbolPackRepositoryForTesting(repository: InstalledPackRepository | null): void {
+  symbolPackRepository = repository ?? new SqliteInstalledPackRepository();
+  packSymbolProviders = [];
+  rebuildSymbolProviders();
 }
 
 function switchToInMemoryRepositories(): void {
@@ -670,7 +722,9 @@ function switchToInMemoryRepositories(): void {
   backupRecencyRepository = new InMemoryBackupRecencyRepository();
   composedMessageRepository = new InMemoryComposedMessageRepository();
   customSymbolRepository = new InMemoryCustomSymbolRepository();
-  symbolProviders = createSymbolProviders(customSymbolRepository);
+  symbolPackRepository = new InMemoryInstalledPackRepository();
+  packSymbolProviders = [];
+  rebuildSymbolProviders();
   // Storage now speaks for the default profile again, so an in-memory fallback cannot strand a
   // session that had switched to a profile the fallback has never heard of.
   setActiveProfileId(DEFAULT_PROFILE_ID);
@@ -760,6 +814,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   // person has always seen rather than an empty grid that fills in a moment later.
   symbolEntries: STARTER_SYMBOL_ENTRIES,
   symbolCategories: SYMBOL_CATEGORIES,
+  symbolPacks: [],
   dictation: { availability: 'unknown', active: false, interim: null, error: null },
 
   setMessage: (text) => set({ message: text }),
@@ -865,6 +920,34 @@ export const useAppStore = create<AppState>((set, get) => ({
     await persistPreferences(set, { ...get().preferences, voiceId });
   },
 
+  setPersona: async (personaId) => {
+    const persona = getVoicePersona(personaId);
+    const preferences = get().preferences;
+    // A persona is a preset, not a lock: choosing one applies its suggested speed and pitch as a
+    // starting point, and the user can still change both controls afterwards.
+    await persistPreferences(set, {
+      ...preferences,
+      personaId: persona?.id ?? null,
+      speechRate: persona ? persona.rate : preferences.speechRate,
+      pitch: persona ? persona.pitch : preferences.pitch,
+    });
+  },
+
+  setVoiceGender: async (voiceGender) => {
+    const { preferences, speech } = get();
+    const next = { ...preferences, voiceGender };
+    // The preference is only honoured where a voice's own name states its gender; voices that say
+    // nothing about gender are never guessed at, so the automatic choice stays in place.
+    const matched = matchVoiceForGender(
+      offlineVoicesForLanguage(speech.capabilities, preferences.language),
+      voiceGender
+    );
+    if (matched) {
+      next.voiceId = matched.id;
+    }
+    await persistPreferences(set, next);
+  },
+
   setFontScale: async (fontScale) => {
     await persistPreferences(set, { ...get().preferences, fontScale });
   },
@@ -912,7 +995,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     await controller.speak(message, options);
     // An utterance from the editor is still an utterance: it belongs in the recent list so the user
-    // can replay it without retyping.
+    // can replay it without retyping. Only a run that actually played is recorded — a request the
+    // engine rejected never reached anyone's ears.
+    if (utteranceFailed(get().speech.status)) {
+      return;
+    }
     await recordSpoken(get, message, preferences.language, 'editor');
   },
 
@@ -932,6 +1019,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       options.voiceId = preferences.voiceId;
     }
     await controller.speak(text, options);
+    // A phrase the engine refused to speak (missing voice, engine not ready) never happened, so it
+    // must not appear in the recent list as though it had been said.
+    if (utteranceFailed(get().speech.status)) {
+      return;
+    }
     await recordSpoken(get, text, target, source);
   },
 
@@ -1101,18 +1193,49 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setComposeDraft: (message) => set({ composeDraft: message }),
 
-  appendComposeText: (text) => {
+  appendComposeText: (text, language) => {
     const normalized = normalizeForSpeech(text);
     if (normalized.length === 0) {
       return;
     }
     const { composeDraft, preferences, activeProfileId } = get();
-    // Script decides the language for Indic input; Latin input follows the active language, so
-    // Manglish stays Manglish (ml+Latn) rather than being spoken as English.
-    const script = detectScript(normalized);
-    const language = defaultLanguageForScript(script) ?? primarySubtag(preferences.language);
-    const segment = textSegment(normalized, language, { kind: 'text' });
-    set({ composeDraft: appendDraftSegment(composeDraft, segment, 'compose', activeProfileId) });
+    // Script decides the language for Indic input; Latin input follows the language the person
+    // chose in Compose (or the active profile when they have not chosen one), so Manglish stays
+    // Manglish (ml+Latn) rather than being spoken as English.
+    const fallback = primarySubtag(language ?? preferences.language);
+    const parts = splitTextByScript(normalized, fallback);
+    let draft = composeDraft;
+    for (const part of parts) {
+      draft = appendDraftSegment(
+        draft,
+        textSegment(part.text, part.language, { kind: 'text' }),
+        'compose',
+        activeProfileId
+      );
+    }
+    if (draft !== composeDraft) {
+      set({ composeDraft: draft });
+    }
+  },
+
+  setComposeSegmentLanguage: (index, language) => {
+    const draft = get().composeDraft;
+    if (!draft || index < 0 || index >= draft.segments.length) {
+      return;
+    }
+    const nextLanguage = primarySubtag(language);
+    if (draft.segments[index].language === nextLanguage) {
+      return;
+    }
+    set({
+      composeDraft: {
+        ...draft,
+        segments: draft.segments.map((segment, position) =>
+          position === index ? { ...segment, language: nextLanguage } : segment
+        ),
+        meta: { ...draft.meta, updatedAt: Date.now() },
+      },
+    });
   },
 
   appendComposeSegment: (segment, source = 'compose') => {
@@ -1132,6 +1255,27 @@ export const useAppStore = create<AppState>((set, get) => ({
       composeDraft: {
         ...draft,
         segments: draft.segments.slice(0, -1),
+        meta: { ...draft.meta, updatedAt: Date.now() },
+      },
+    });
+  },
+
+  removeComposeSegmentAt: (index) => {
+    const draft = get().composeDraft;
+    if (!draft || index < 0 || index >= draft.segments.length) {
+      return;
+    }
+    const segments = draft.segments.filter((_segment, position) => position !== index);
+    // Emptying the strip removes the draft rather than leaving a message with no words in it; the
+    // board shows the same empty state whether it was cleared or tapped back to nothing.
+    if (segments.length === 0) {
+      set({ composeDraft: null });
+      return;
+    }
+    set({
+      composeDraft: {
+        ...draft,
+        segments,
         meta: { ...draft.meta, updatedAt: Date.now() },
       },
     });
@@ -1186,6 +1330,25 @@ export const useAppStore = create<AppState>((set, get) => ({
     } catch (error) {
       reportCustomSymbolStorageFailure('read your pictures', error);
     }
+  },
+
+  refreshSymbolPacks: async () => {
+    try {
+      set({ symbolPacks: await refreshPackSymbolProviders() });
+    } catch (error) {
+      reportCustomSymbolStorageFailure('read symbol packs', error);
+    }
+  },
+
+  installArasaacPack: async () => {
+    try {
+      await installArasaacPack(arasaacInstallDeps(symbolPackRepository));
+    } catch {
+      return 'failed';
+    }
+    await get().refreshSymbolPacks();
+    await get().loadSymbols();
+    return 'installed';
   },
 
   searchSymbols: (query, language) => searchSymbolEntries(symbolProviders, query, language),
@@ -1250,6 +1413,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       rate: preferences.speechRate,
       pitch: preferences.pitch,
     });
+    let completed = true;
     for (const entry of plan) {
       const language = resolveSpeechLanguage(entry.language, preferences.language);
       const options: SpeechOptions = {
@@ -1265,9 +1429,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       await controller.speakAndWait(entry.text, options);
       const status = get().speech.status;
       // A stop, a failure or a superseded request ends the run; do not keep speaking the rest.
-      if (status === 'stopped' || status === 'error' || status === 'voice-unavailable') {
+      if (status === 'stopped' || utteranceFailed(status)) {
+        completed = false;
         break;
       }
+    }
+    // A message that was cut short or refused was never actually said. Recording it would tell the
+    // user they had communicated something they had not.
+    if (!completed) {
+      return;
     }
     await recordSpoken(get, messageToPlainText(message), preferences.language, source);
   },
@@ -1275,28 +1445,39 @@ export const useAppStore = create<AppState>((set, get) => ({
   shareComposedText: async (message) => {
     const text = messageToPlainText(message);
     if (text.length === 0) {
-      return false;
+      return { ok: false, reason: 'There is nothing to share yet.' };
     }
-    const result = await shareText(text, 'Share message');
-    return result.ok;
+    return shareText(text, 'Share message');
   },
 
   shareComposedAudio: async (message) => {
-    const text = messageToPlainText(message);
-    if (text.length === 0) {
-      return false;
+    if (isMessageEmpty(message)) {
+      return { ok: false, reason: 'There is nothing to share yet.' };
     }
     const { preferences } = get();
-    const options: SpeechOptions = {
+    // The same plan Speak uses: one utterance per language, each rendered in its own voice, then
+    // joined into one file. A mixed-language message therefore sounds the same whether it is
+    // spoken or shared.
+    const plan = messageToSpeechPlan(message, {
       language: preferences.language,
+      ...(preferences.voiceId ? { voiceId: preferences.voiceId } : {}),
       rate: preferences.speechRate,
       pitch: preferences.pitch,
-    };
-    if (preferences.voiceId) {
-      options.voiceId = preferences.voiceId;
+    });
+    const entries: AudioPlanEntry[] = [];
+    for (const entry of plan) {
+      const language = resolveSpeechLanguage(entry.language, preferences.language);
+      const options: SpeechOptions = {
+        language,
+        rate: entry.rate ?? preferences.speechRate,
+        pitch: entry.pitch ?? preferences.pitch,
+      };
+      if (entry.voiceId && language === preferences.language) {
+        options.voiceId = entry.voiceId;
+      }
+      entries.push({ text: entry.text, options });
     }
-    const result = await shareAudio(text, options);
-    return result.ok;
+    return shareAudioPlan(entries);
   },
 
   refreshDictationAvailability: async () => {
@@ -2210,6 +2391,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await get().refreshLibrary();
     await get().refreshCommunication();
     await get().refreshComposedMessages();
+    await get().refreshSymbolPacks();
     await get().loadSymbols();
 
     await controller.initialize();
@@ -2335,6 +2517,16 @@ function primarySubtag(language: string): string {
 }
 
 /**
+ * True when the speech status means the utterance never actually played.
+ *
+ * Used to keep the recent and most-used lists honest: a request the engine refused (no engine, no
+ * voice for the language) must not be remembered as something the user said.
+ */
+function utteranceFailed(status: SpeechStatus): boolean {
+  return status === 'error' || status === 'voice-unavailable';
+}
+
+/**
  * Expands a bare language subtag (`ml`) to a full tag the speech engine understands (`ml-IN`).
  *
  * A segment stores the language subtag because language and script are kept separate; the engine
@@ -2364,7 +2556,18 @@ function appendDraftSegment(
     return {
       id: createMessageId(),
       segments: [segment],
-      meta: { source, profileId, createdAt: now, updatedAt: now },
+      meta: {
+        source,
+        profileId,
+        createdAt: now,
+        updatedAt: now,
+        parents: [],
+        flags: {},
+      },
+      renderHints: {
+        speak: [{ language: segment.language }],
+        share: { preferred: 'text' },
+      },
     };
   }
   return {
